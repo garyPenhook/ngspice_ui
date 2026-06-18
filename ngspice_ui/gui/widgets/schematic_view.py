@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -100,6 +100,50 @@ class _Schematic:
     syms:     list[_PlacedSym] = field(default_factory=list)
     sym_defs: dict[str, _SymDef] = field(default_factory=dict)
     bbox: tuple = (0.0, 0.0, 100.0, 100.0)
+    # wire-index → net-id (built lazily via Union-Find)
+    wire_net: dict[int, int] = field(default_factory=dict)
+    # net-id → label name
+    net_names: dict[int, str] = field(default_factory=dict)
+
+
+def _build_net_connectivity(sch: _Schematic) -> None:
+    """Union-Find wire connectivity → populate wire_net and net_names."""
+    parent: list[int] = list(range(len(sch.wires)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        pa, pb = find(a), find(b)
+        if pa != pb:
+            parent[pa] = pb
+
+    eps = 1e-6
+
+    def pt_match(ax, ay, bx, by):
+        return abs(ax - bx) < eps and abs(ay - by) < eps
+
+    for i, wi in enumerate(sch.wires):
+        for j, wj in enumerate(sch.wires):
+            if j <= i:
+                continue
+            for ax, ay in ((wi.x1, wi.y1), (wi.x2, wi.y2)):
+                for bx, by in ((wj.x1, wj.y1), (wj.x2, wj.y2)):
+                    if pt_match(ax, ay, bx, by):
+                        union(i, j)
+
+    for i, w in enumerate(sch.wires):
+        sch.wire_net[i] = find(i)
+
+    # Map labels to nets
+    for lbl in sch.labels:
+        for i, w in enumerate(sch.wires):
+            for wx, wy in ((w.x1, w.y1), (w.x2, w.y2)):
+                if pt_match(lbl.x, lbl.y, wx, wy):
+                    sch.net_names[find(i)] = lbl.text
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +449,7 @@ def _parse_schematic(path: Path) -> _Schematic:
         pad = 5.0
         sch.bbox = (min(xs)-pad, min(ys)-pad, max(xs)+pad, max(ys)+pad)
 
+    _build_net_connectivity(sch)
     return sch
 
 
@@ -412,21 +457,31 @@ def _parse_schematic(path: Path) -> _Schematic:
 # Painter widget
 # ---------------------------------------------------------------------------
 
+_C_HIGHLIGHT = QColor("#ffff00")
+_C_OP_LABEL  = QColor("#00ffcc")
+
+
 class _SchCanvas(QWidget):
-    """Inner painter canvas with pan/zoom."""
+    """Inner painter canvas with pan/zoom, net highlighting, and OP annotations."""
+
+    net_probed = Signal(str)   # emitted with net name on Ctrl+click
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._sch: _Schematic | None = None
-        self._scale = 5.0       # pixels per mm
+        self._scale = 5.0
         self._pan_x = 20.0
         self._pan_y = 20.0
         self._drag_start: QPointF | None = None
         self._drag_pan0 = (0.0, 0.0)
         self._fitted = False
+        self._highlighted_net: int | None = None
+        self._op_voltages: dict[str, float] = {}
+        self._show_op = False
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
         self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setMouseTracking(True)
 
     def load(self, path: Path) -> None:
         try:
@@ -436,10 +491,39 @@ class _SchCanvas(QWidget):
             self._err = str(exc)
         else:
             self._err = ''
+        self._highlighted_net = None
         self._fitted = False
         self.update()
         if self.isVisible():
             self._fit()
+
+    def set_op_voltages(self, voltages: dict[str, float], show: bool = True) -> None:
+        self._op_voltages = voltages
+        self._show_op = show
+        self.update()
+
+    def _screen_to_sch(self, sx: float, sy: float) -> tuple[float, float]:
+        return (sx - self._pan_x) / self._scale, (sy - self._pan_y) / self._scale
+
+    def _net_at(self, sx: float, sy: float) -> int | None:
+        if self._sch is None:
+            return None
+        mx, my = self._screen_to_sch(sx, sy)
+        eps = 1.0  # mm tolerance
+        for i, w in enumerate(self._sch.wires):
+            # point-to-segment distance
+            dx, dy = w.x2 - w.x1, w.y2 - w.y1
+            length = math.hypot(dx, dy)
+            if length < 1e-6:
+                d = math.hypot(mx - w.x1, my - w.y1)
+            else:
+                t = max(0.0, min(1.0, ((mx - w.x1) * dx + (my - w.y1) * dy) / (length * length)))
+                px = w.x1 + t * dx
+                py = w.y1 + t * dy
+                d = math.hypot(mx - px, my - py)
+            if d < eps:
+                return self._sch.wire_net.get(i)
+        return None
 
     def clear(self) -> None:
         self._sch = None
@@ -493,17 +577,41 @@ class _SchCanvas(QWidget):
         self._zoom(factor, pos.x(), pos.y())
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        pos = event.position()
+        mods = event.modifiers()
+        if event.button() == Qt.MouseButton.LeftButton and mods & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+click → probe net
+            net_id = self._net_at(pos.x(), pos.y())
+            if net_id is not None and self._sch is not None:
+                name = self._sch.net_names.get(net_id, f"net{net_id}")
+                self.net_probed.emit(name)
+            return
+        if event.button() == Qt.MouseButton.LeftButton and not (mods & Qt.KeyboardModifier.ControlModifier):
+            net_id = self._net_at(pos.x(), pos.y())
+            if net_id is not None:
+                self._highlighted_net = net_id if self._highlighted_net != net_id else None
+                self.update()
+                return
         if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
-            self._drag_start = event.position()
+            self._drag_start = pos
             self._drag_pan0 = (self._pan_x, self._pan_y)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        pos = event.position()
         if self._drag_start is not None:
-            d = event.position() - self._drag_start
+            d = pos - self._drag_start
             self._pan_x = self._drag_pan0[0] + d.x()
             self._pan_y = self._drag_pan0[1] + d.y()
             self.update()
+        else:
+            # Hover tooltip
+            net_id = self._net_at(pos.x(), pos.y())
+            if net_id is not None and self._sch is not None:
+                name = self._sch.net_names.get(net_id, f"net{net_id}")
+                self.setToolTip(name)
+            else:
+                self.setToolTip("")
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._drag_start = None
@@ -529,13 +637,20 @@ class _SchCanvas(QWidget):
         p.translate(self._pan_x, self._pan_y)
         p.scale(self._scale, self._scale)
 
-        # 1. Wires
-        p.setPen(QPen(_C_WIRE, lw, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        for w in sch.wires:
-            if not w.is_bus:
-                p.drawLine(QPointF(w.x1, w.y1), QPointF(w.x2, w.y2))
+        # 1. Wires (with net highlighting)
+        hl_net = self._highlighted_net
+        pen_wire = QPen(_C_WIRE, lw, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        pen_hl   = QPen(_C_HIGHLIGHT, lw * 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        pen_bus  = QPen(_C_BUS, lw_bus, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
 
-        p.setPen(QPen(_C_BUS, lw_bus, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for i, w in enumerate(sch.wires):
+            if w.is_bus:
+                continue
+            net_id = sch.wire_net.get(i)
+            p.setPen(pen_hl if (hl_net is not None and net_id == hl_net) else pen_wire)
+            p.drawLine(QPointF(w.x1, w.y1), QPointF(w.x2, w.y2))
+
+        p.setPen(pen_bus)
         for w in sch.wires:
             if w.is_bus:
                 p.drawLine(QPointF(w.x1, w.y1), QPointF(w.x2, w.y2))
@@ -636,6 +751,25 @@ class _SchCanvas(QWidget):
                 self._draw_label(p, sym.val_x, sym.val_y, sym.val_angle,
                                  sym.value, _C_VALUE)
 
+        # 7. OP voltage annotations
+        if self._show_op and self._op_voltages:
+            p.save()
+            p.resetTransform()
+            font = QFont("Sans Serif")
+            font.setPixelSize(max(7, min(12, int(self._scale * 1.2))))
+            p.setFont(font)
+            p.setPen(QPen(_C_OP_LABEL))
+            for lbl in sch.labels:
+                key = lbl.text.lower()
+                for k, v in self._op_voltages.items():
+                    if k.lower() == key or k.lower() == f"v({key})":
+                        sx = lbl.x * self._scale + self._pan_x
+                        sy = lbl.y * self._scale + self._pan_y
+                        p.drawText(QRectF(sx + 2, sy - 14, 80, 14),
+                                   f"{v:.3g}V")
+                        break
+            p.restore()
+
         p.end()
 
     def _draw_label(self, p: QPainter,
@@ -672,15 +806,24 @@ class _SchCanvas(QWidget):
 class SchematicView(QWidget):
     """Read-only KiCad schematic viewer, suitable for embedding in a QDockWidget."""
 
+    net_probed = Signal(str)   # forwarded from canvas
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._canvas = _SchCanvas()
+        self._canvas.net_probed.connect(self.net_probed)
 
         btn_fit  = QToolButton(); btn_fit.setText("Fit");  btn_fit.setFixedWidth(36)
         btn_in   = QToolButton(); btn_in.setText("+");     btn_in.setFixedWidth(28)
         btn_out  = QToolButton(); btn_out.setText("−");    btn_out.setFixedWidth(28)
         self._info = QLabel()
         self._info.setStyleSheet("color: #808080; font-size: 9pt;")
+
+        self._btn_op = QToolButton()
+        self._btn_op.setText("OP")
+        self._btn_op.setCheckable(True)
+        self._btn_op.setToolTip("Toggle operating-point voltage overlays")
+        self._btn_op.toggled.connect(self._on_op_toggled)
 
         btn_fit.clicked.connect(self._canvas.fit)
         btn_in.clicked.connect(self._canvas.zoom_in)
@@ -689,7 +832,7 @@ class SchematicView(QWidget):
         tb = QHBoxLayout()
         tb.setContentsMargins(4, 2, 4, 2)
         tb.setSpacing(4)
-        for w in (btn_fit, btn_in, btn_out, self._info):
+        for w in (btn_fit, btn_in, btn_out, self._btn_op, self._info):
             tb.addWidget(w)
         tb.addStretch()
 
@@ -708,4 +851,11 @@ class SchematicView(QWidget):
 
     def clear(self) -> None:
         self._canvas.clear()
+
+    def set_op_voltages(self, voltages: dict[str, float]) -> None:
+        self._canvas.set_op_voltages(voltages, show=self._btn_op.isChecked())
+
+    def _on_op_toggled(self, checked: bool) -> None:
+        self._canvas._show_op = checked
+        self._canvas.update()
         self._info.setText("")

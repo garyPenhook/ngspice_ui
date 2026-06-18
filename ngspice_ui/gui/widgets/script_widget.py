@@ -204,3 +204,13 @@ class ScriptWidget(QWidget):
     def _reset_ns(self) -> None:
         self.set_context(self._session, self._ctrl)
         self._emit("# namespace reset")
+
+    # ------------------------------------------------------------------
+    # Project serialisation
+    # ------------------------------------------------------------------
+
+    def get_config(self) -> dict:
+        return {"input": self._inp.toPlainText()}
+
+    def set_config(self, cfg: dict) -> None:
+        self._inp.setPlainText(cfg.get("input", ""))

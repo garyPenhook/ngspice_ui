@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QSizePolicy,
@@ -27,8 +30,6 @@ class AnalysisPanel(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        # _param_widgets[combo_index] → {param_name: widget}
-        # combo index 0 = "Use netlist as-is"
         self._param_widgets: list[dict[str, QWidget]] = []
 
         outer = QVBoxLayout(self)
@@ -46,7 +47,26 @@ class AnalysisPanel(QWidget):
         self._stack = QStackedWidget()
         outer.addWidget(self._stack)
 
-        # Preview label — shows the generated dot-command
+        # Temperature sweep (optional, applies to any analysis)
+        temp_box = QGroupBox("Temperature")
+        temp_box.setCheckable(True)
+        temp_box.setChecked(False)
+        temp_box.setFlat(True)
+        tl = QHBoxLayout(temp_box)
+        tl.setContentsMargins(4, 4, 4, 4)
+        self._temp_edit = QLineEdit()
+        self._temp_edit.setPlaceholderText("27  or  0 50 100")
+        self._temp_edit.setToolTip(
+            "Single temperature (°C) or space-separated list for a .step temp list sweep"
+        )
+        self._temp_edit.textChanged.connect(self._update_preview)
+        tl.addWidget(QLabel("°C:"))
+        tl.addWidget(self._temp_edit)
+        self._temp_box = temp_box
+        temp_box.toggled.connect(self._update_preview)
+        outer.addWidget(temp_box)
+
+        # Preview label
         self._preview = QLabel()
         self._preview.setWordWrap(True)
         self._preview.setStyleSheet(
@@ -62,7 +82,7 @@ class AnalysisPanel(QWidget):
         self._stack.addWidget(lbl)
         self._param_widgets.append({})
 
-        # Pages 1..N: one per analysis key
+        # Pages 1..N
         for key in ANALYSIS_KEY_ORDER:
             page, widgets = self._make_page(ANALYSES[key])
             self._stack.addWidget(page)
@@ -108,7 +128,8 @@ class AnalysisPanel(QWidget):
                 le.textChanged.connect(self._update_preview)
                 w = le
             widgets[p.name] = w
-            form.addRow(p.label + ":", w)
+            label_text = p.label + (":" if p.required else " (opt):")
+            form.addRow(label_text, w)
 
         return page, widgets
 
@@ -118,16 +139,36 @@ class AnalysisPanel(QWidget):
         self.analysis_changed.emit()
 
     def _update_preview(self) -> None:
-        line = self.get_netlist_line()
-        self._preview.setText(line if line else "(from netlist)")
+        lines = []
+        temp_line = self._get_temp_line()
+        if temp_line:
+            lines.append(temp_line)
+        main_line = self.get_netlist_line()
+        if main_line:
+            lines.append(main_line)
+        self._preview.setText("\n".join(lines) if lines else "(from netlist)")
         self.analysis_changed.emit()
+
+    def _get_temp_line(self) -> str:
+        if not self._temp_box.isChecked():
+            return ""
+        val = self._temp_edit.text().strip()
+        if not val:
+            return ""
+        temps = val.split()
+        if len(temps) == 1:
+            return f".temp {temps[0]}"
+        return ".step temp list " + " ".join(temps)
+
+    def _get_widgets(self, key: str) -> dict[str, QWidget]:
+        idx = self._combo.currentIndex()
+        return self._param_widgets[idx]
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def selected_key(self) -> str | None:
-        """Return the analysis key (e.g. 'tran') or None for 'use netlist'."""
         idx = self._combo.currentIndex()
         return None if idx == 0 else ANALYSIS_KEY_ORDER[idx - 1]
 
@@ -139,6 +180,44 @@ class AnalysisPanel(QWidget):
         spec = ANALYSES[key]
         idx = self._combo.currentIndex()
         widgets = self._param_widgets[idx]
+
+        def _val(name: str) -> str:
+            w = widgets.get(name)
+            if w is None:
+                return ""
+            if isinstance(w, QComboBox):
+                return w.currentText()
+            assert isinstance(w, QLineEdit)
+            return w.text().strip()
+
+        if key == "tran":
+            tstep = _val("tstep")
+            tstop = _val("tstop")
+            tmax = _val("tmax")
+            uic = _val("uic")
+            cmd = f".tran {tstep} {tstop}"
+            if tmax:
+                cmd += f" {tmax}"
+            if uic == "Yes":
+                if not tmax:
+                    cmd += " 0"
+                cmd += " uic"
+            return cmd
+
+        if key == "dc":
+            src = _val("src")
+            vstart = _val("vstart")
+            vstop = _val("vstop")
+            vincr = _val("vincr")
+            src2 = _val("src2")
+            cmd = f".dc {src} {vstart} {vstop} {vincr}"
+            if src2:
+                vstart2 = _val("vstart2")
+                vstop2 = _val("vstop2")
+                vincr2 = _val("vincr2")
+                cmd += f" {src2} {vstart2} {vstop2} {vincr2}"
+            return cmd
+
         kwargs: dict[str, str] = {}
         for p in spec.params:
             w = widgets[p.name]
@@ -149,50 +228,61 @@ class AnalysisPanel(QWidget):
                 kwargs[p.name] = w.text().strip()
         return "." + spec.command.format(**kwargs)
 
+    def get_temperature_lines(self) -> list[str]:
+        """Return .temp/.step lines to prepend, or empty list."""
+        line = self._get_temp_line()
+        return [line] if line else []
+
     def get_config(self) -> dict:
         """Return a JSON-serialisable dict describing the current analysis setup."""
         key = self.selected_key()
-        if key is None:
-            return {"key": None}
-        idx = self._combo.currentIndex()
-        widgets = self._param_widgets[idx]
-        params: dict[str, str] = {}
-        for p in ANALYSES[key].params:
-            w = widgets[p.name]
-            if isinstance(w, QComboBox):
-                params[p.name] = w.currentText()
-            else:
-                assert isinstance(w, QLineEdit)
-                params[p.name] = w.text().strip()
-        return {"key": key, "params": params}
+        cfg: dict = {"key": key}
+
+        if key is not None:
+            idx = self._combo.currentIndex()
+            widgets = self._param_widgets[idx]
+            params: dict[str, str] = {}
+            for p in ANALYSES[key].params:
+                w = widgets[p.name]
+                if isinstance(w, QComboBox):
+                    params[p.name] = w.currentText()
+                else:
+                    assert isinstance(w, QLineEdit)
+                    params[p.name] = w.text().strip()
+            cfg["params"] = params
+
+        cfg["temp_enabled"] = self._temp_box.isChecked()
+        cfg["temp_value"] = self._temp_edit.text().strip()
+        return cfg
 
     def set_config(self, cfg: dict) -> None:
         """Restore analysis setup from a dict previously returned by get_config()."""
         key = cfg.get("key")
         if key is None:
             self._combo.setCurrentIndex(0)
-            return
-        for i, k in enumerate(ANALYSIS_KEY_ORDER):
-            if k == key:
-                self._combo.setCurrentIndex(i + 1)
-                break
         else:
-            return
-        params = cfg.get("params", {})
-        idx = self._combo.currentIndex()
-        widgets = self._param_widgets[idx]
-        for p in ANALYSES[key].params:
-            w = widgets.get(p.name)
-            if w is None:
-                continue
-            val = params.get(p.name, "")
-            if isinstance(w, QComboBox):
-                i = w.findText(val)
-                if i >= 0:
-                    w.setCurrentIndex(i)
-            else:
-                assert isinstance(w, QLineEdit)
-                w.setText(val)
+            for i, k in enumerate(ANALYSIS_KEY_ORDER):
+                if k == key:
+                    self._combo.setCurrentIndex(i + 1)
+                    break
+            params = cfg.get("params", {})
+            idx = self._combo.currentIndex()
+            widgets = self._param_widgets[idx]
+            for p in ANALYSES[key].params:
+                w = widgets.get(p.name)
+                if w is None:
+                    continue
+                val = params.get(p.name, "")
+                if isinstance(w, QComboBox):
+                    i2 = w.findText(val)
+                    if i2 >= 0:
+                        w.setCurrentIndex(i2)
+                else:
+                    assert isinstance(w, QLineEdit)
+                    w.setText(val)
+
+        self._temp_box.setChecked(cfg.get("temp_enabled", False))
+        self._temp_edit.setText(cfg.get("temp_value", ""))
 
     def validate(self) -> list[str]:
         """Return a list of human-readable error messages for missing required fields."""
@@ -204,6 +294,8 @@ class AnalysisPanel(QWidget):
         widgets = self._param_widgets[idx]
         errors: list[str] = []
         for p in spec.params:
+            if not p.required:
+                continue
             if p.kind == "text":
                 w = widgets[p.name]
                 assert isinstance(w, QLineEdit)

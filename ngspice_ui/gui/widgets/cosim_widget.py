@@ -28,17 +28,21 @@ Example:
 
 from __future__ import annotations
 
+import csv
 import math
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -109,9 +113,16 @@ class CoSimWidget(QWidget):
         btn_del.setToolTip("Remove selected row")
         btn_del.clicked.connect(self._del_row)
 
+        btn_csv = QPushButton("Load CSV…")
+        btn_csv.setToolTip(
+            "Load a CSV (time, value) file as a PWL source for the selected row"
+        )
+        btn_csv.clicked.connect(self._load_csv)
+
         tbl_btns = QHBoxLayout()
         tbl_btns.addWidget(btn_add)
         tbl_btns.addWidget(btn_del)
+        tbl_btns.addWidget(btn_csv)
         tbl_btns.addStretch()
 
         # Sync expression
@@ -273,3 +284,92 @@ class CoSimWidget(QWidget):
             self._status.setText("Co-sim: callbacks cleared (no-op installed)")
         except Exception as exc:
             self._status.setText(f"disable failed: {exc}")
+
+    def _load_csv(self) -> None:
+        """Load a (time, value) CSV and generate a PWL interpolation expression."""
+        rows = {idx.row() for idx in self._table.selectedIndexes()}
+        row = next(iter(rows)) if rows else -1
+        if row < 0:
+            QMessageBox.information(self, "Load CSV", "Select a row first.")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open CSV", str(Path.home()),
+            "CSV files (*.csv *.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            times: list[float] = []
+            values: list[float] = []
+            with open(path, newline="", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                for r in reader:
+                    if len(r) < 2:
+                        continue
+                    try:
+                        times.append(float(r[0]))
+                        values.append(float(r[1]))
+                    except ValueError:
+                        continue
+            if len(times) < 2:
+                QMessageBox.warning(self, "Load CSV", "Need at least 2 data rows.")
+                return
+            # Build a numpy-interp expression referencing inline arrays
+            t_str = repr(times)
+            v_str = repr(values)
+            expr = f"float(np.interp(t, {t_str}, {v_str}))"
+            item = self._table.item(row, 3)
+            if item is None:
+                self._table.setItem(row, 3, QTableWidgetItem(expr))
+            else:
+                item.setText(expr)
+            self._status.setText(f"Loaded {len(times)} points from {Path(path).name}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Load CSV Error", str(exc))
+
+    # ------------------------------------------------------------------
+    # Project serialisation
+    # ------------------------------------------------------------------
+
+    def get_config(self) -> dict:
+        rows: list[dict] = []
+        for r in range(self._table.rowCount()):
+            chk = self._table.item(r, 0)
+            name_item = self._table.item(r, 1)
+            expr_item = self._table.item(r, 3)
+            cmb = self._table.cellWidget(r, 2)
+            rows.append({
+                "enabled": chk.checkState() == Qt.CheckState.Checked if chk else True,
+                "name": name_item.text() if name_item else "",
+                "type": cmb.currentText() if cmb else "V",
+                "expr": expr_item.text() if expr_item else "",
+            })
+        return {
+            "rows": rows,
+            "sync": self._sync_edit.text(),
+        }
+
+    def set_config(self, cfg: dict) -> None:
+        while self._table.rowCount() > 0:
+            self._table.removeRow(0)
+        for rd in cfg.get("rows", []):
+            self._add_row()
+            r = self._table.rowCount() - 1
+            chk = self._table.item(r, 0)
+            if chk:
+                chk.setCheckState(
+                    Qt.CheckState.Checked if rd.get("enabled", True)
+                    else Qt.CheckState.Unchecked
+                )
+            name_item = self._table.item(r, 1)
+            if name_item:
+                name_item.setText(rd.get("name", ""))
+            cmb = self._table.cellWidget(r, 2)
+            if cmb:
+                idx = cmb.findText(rd.get("type", "V"))
+                if idx >= 0:
+                    cmb.setCurrentIndex(idx)
+            expr_item = self._table.item(r, 3)
+            if expr_item:
+                expr_item.setText(rd.get("expr", ""))
+        self._sync_edit.setText(cfg.get("sync", ""))

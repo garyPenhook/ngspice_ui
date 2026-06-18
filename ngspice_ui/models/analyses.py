@@ -1,7 +1,7 @@
 """Single source of truth: analysis type → ngspice command and metadata."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -12,6 +12,7 @@ class ParamSpec:
     kind: str = "text"              # "text" | "choice"
     choices: tuple[str, ...] = ()
     default: str = ""
+    required: bool = True           # False → omit from validate() checks
 
 
 @dataclass(frozen=True)
@@ -25,11 +26,14 @@ class AnalysisSpec:
 ANALYSES: dict[str, AnalysisSpec] = {
     "tran": AnalysisSpec(
         label="Transient",
-        command="tran {tstep} {tstop}",
+        command="tran {tstep} {tstop}",   # extended by panel for tmax/uic
         scale_name="time",
         params=(
             ParamSpec("tstep", "Time step", placeholder="1us"),
             ParamSpec("tstop", "Stop time", placeholder="1ms"),
+            ParamSpec("tmax", "Max step", placeholder="(optional)", required=False),
+            ParamSpec("uic", "Use IC", kind="choice",
+                      choices=("No", "Yes"), default="No", required=False),
         ),
     ),
     "ac": AnalysisSpec(
@@ -46,13 +50,17 @@ ANALYSES: dict[str, AnalysisSpec] = {
     ),
     "dc": AnalysisSpec(
         label="DC Sweep",
-        command="dc {src} {vstart} {vstop} {vincr}",
+        command="dc {src} {vstart} {vstop} {vincr}",  # extended by panel for 2nd source
         scale_name="v-sweep",
         params=(
             ParamSpec("src", "Source", placeholder="V1"),
             ParamSpec("vstart", "Start", placeholder="0"),
             ParamSpec("vstop", "Stop", placeholder="5"),
             ParamSpec("vincr", "Step", placeholder="0.1"),
+            ParamSpec("src2", "2nd Source", placeholder="(optional)", required=False),
+            ParamSpec("vstart2", "2nd Start", placeholder="0", required=False),
+            ParamSpec("vstop2", "2nd Stop", placeholder="5", required=False),
+            ParamSpec("vincr2", "2nd Step", placeholder="1", required=False),
         ),
     ),
     "op": AnalysisSpec(

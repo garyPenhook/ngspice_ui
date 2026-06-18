@@ -66,14 +66,17 @@ class SimController(QObject):
         except RuntimeError as exc:
             self.output_line.emit(f"run error: {exc}")
 
-    def run_with_analysis(self, netlist: str, analysis_line: str | None) -> None:
-        self._pending_errors.clear()
+    def run_with_analysis(
+        self,
+        netlist: str,
+        analysis_line: str | None,
+        extra_lines: list[str] | None = None,
+    ) -> None:
         """Load *netlist* text, optionally override its analysis command, then bg_run.
 
-        When *analysis_line* is not None (e.g. '.tran 1us 1ms'), any existing
-        analysis dot-commands are stripped from the netlist and *analysis_line*
-        is appended in their place before loading.
+        extra_lines: prepended before the first non-title line (e.g. .temp, .step).
         """
+        self._pending_errors.clear()
         lines = netlist.splitlines()
         if analysis_line is not None:
             filtered: list[str] = []
@@ -86,11 +89,18 @@ class SimController(QObject):
                 filtered.append(ln)
             filtered.append(analysis_line)
             lines = filtered
+        if extra_lines:
+            # Insert after title line (line 0) or at start
+            insert_at = 1 if lines and lines[0].strip().startswith("*") else 0
+            lines = lines[:insert_at] + list(extra_lines) + lines[insert_at:]
         try:
             self._session.load_netlist(lines)
             self.output_line.emit("-- netlist loaded --")
             if analysis_line:
                 self.output_line.emit(f"-- analysis: {analysis_line} --")
+            if extra_lines:
+                for el in extra_lines:
+                    self.output_line.emit(f"-- extra: {el} --")
         except RuntimeError as exc:
             self.output_line.emit(f"load error: {exc}")
             return
