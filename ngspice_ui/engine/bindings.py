@@ -264,24 +264,22 @@ def _wire_prototypes(lib: ctypes.CDLL) -> None:
     lib.ngSpice_SetBkpt.restype  = c_bool
     lib.ngSpice_SetBkpt.argtypes = [c_double]
 
-    # ngSpice_Reset was added in ngspice-40; guard so we work on older distro packages
-    try:
-        lib.ngSpice_Reset.restype  = c_int
-        lib.ngSpice_Reset.argtypes = []
-    except AttributeError:
-        pass
+    # The following symbols were added in newer ngspice releases and are absent
+    # from older distro packages (e.g. Ubuntu 22.04 libngspice0 ≈ ngspice-36).
+    # Wire them only when present so the loader works on any ngspice >= 32.
+    def _try_wire(name: str, restype, argtypes: list) -> None:
+        try:
+            fn = getattr(lib, name)
+            fn.restype  = restype
+            fn.argtypes = argtypes
+        except AttributeError:
+            pass
 
-    lib.ngSpice_nospinit.restype  = c_int
-    lib.ngSpice_nospinit.argtypes = []
-
-    lib.ngSpice_nospiceinit.restype  = c_int
-    lib.ngSpice_nospiceinit.argtypes = []
-
-    lib.ngSpice_LockRealloc.restype  = c_int
-    lib.ngSpice_LockRealloc.argtypes = []
-
-    lib.ngSpice_UnlockRealloc.restype  = c_int
-    lib.ngSpice_UnlockRealloc.argtypes = []
+    _try_wire("ngSpice_Reset",        c_int,  [])
+    _try_wire("ngSpice_nospinit",     c_int,  [])
+    _try_wire("ngSpice_nospiceinit",  c_int,  [])
+    _try_wire("ngSpice_LockRealloc",  c_int,  [])
+    _try_wire("ngSpice_UnlockRealloc", c_int, [])
 
 
 # ---------------------------------------------------------------------------
