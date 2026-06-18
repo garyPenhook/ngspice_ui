@@ -8,9 +8,10 @@ callbacks fire on ngspice's background thread and push to event_queue.
 
 from __future__ import annotations
 
+import ctypes
 import queue
 import threading
-from ctypes import c_char_p, cast, create_string_buffer, POINTER
+from ctypes import c_char_p, c_int, cast, create_string_buffer, POINTER
 from typing import Callable
 
 from .bindings import NgSpiceNotFoundError, get_lib  # noqa: F401 (re-exported)
@@ -197,6 +198,83 @@ class NgSpiceSession:
             return VectorData.from_c(p.contents)
         finally:
             self._lib.ngSpice_UnlockRealloc()
+
+    # ------------------------------------------------------------------
+    # Co-simulation
+    # ------------------------------------------------------------------
+
+    def init_sync(
+        self,
+        vsrc_fn: "Callable[[float, str], float] | None" = None,
+        isrc_fn: "Callable[[float, str], float] | None" = None,
+        sync_fn: "Callable[[float, float], float | None] | None" = None,
+    ) -> None:
+        """Register Python callables as co-simulation callbacks.
+
+        vsrc_fn(time, srcname) -> float
+            Called by ngspice to obtain the voltage (V) for an external
+            voltage source named *srcname* at simulation time *time*.
+
+        isrc_fn(time, srcname) -> float
+            Same for an external current source (A).
+
+        sync_fn(actual_time, old_delta) -> float | None
+            Delta-time negotiation hook.  Return a proposed shorter step
+            (in seconds) or None to accept ngspice's own choice.
+
+        Pass all None to register no-op callbacks (effectively disables
+        any previously registered co-sim functions without unloading the
+        interface).
+
+        Netlist side: declare external sources normally, e.g.
+            Vext n1 n2 dc 0
+        ngspice will call vsrc_fn whenever it needs the value of 'vext'.
+
+        The ctypes callback objects are kept alive on this session instance
+        for the duration of the process (libngspice holds raw C pointers).
+        """
+        from .bindings import CB_GetVSRCData, CB_GetISRCData, CB_GetSyncData
+
+        def _vsrc(voltage_ptr, time, srcname, srcindex, userdata):
+            if vsrc_fn is not None:
+                try:
+                    name = srcname.decode("utf-8") if srcname else ""
+                    voltage_ptr[0] = float(vsrc_fn(float(time), name))
+                except Exception:
+                    pass
+            return 0
+
+        def _isrc(current_ptr, time, srcname, srcindex, userdata):
+            if isrc_fn is not None:
+                try:
+                    name = srcname.decode("utf-8") if srcname else ""
+                    current_ptr[0] = float(isrc_fn(float(time), name))
+                except Exception:
+                    pass
+            return 0
+
+        def _sync(actual_time, delta_ptr, old_delta, index, is_diff, nm, userdata):
+            if sync_fn is not None:
+                try:
+                    result = sync_fn(float(actual_time), float(old_delta))
+                    if result is not None:
+                        delta_ptr[0] = float(result)
+                except Exception:
+                    pass
+            return 0
+
+        vsrc_c = CB_GetVSRCData(_vsrc)
+        isrc_c = CB_GetISRCData(_isrc)
+        sync_c = CB_GetSyncData(_sync)
+        # Must keep alive — libngspice holds raw C function pointers
+        self._sync_callbacks = (vsrc_c, isrc_c, sync_c)
+
+        ident = c_int(0)
+        ret = self._lib.ngSpice_Init_Sync(
+            vsrc_c, isrc_c, sync_c, ctypes.byref(ident), None
+        )
+        if ret != 0:
+            raise RuntimeError(f"ngSpice_Init_Sync returned {ret}")
 
     # ------------------------------------------------------------------
     # Reset / cleanup

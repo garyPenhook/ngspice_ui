@@ -149,6 +149,51 @@ class AnalysisPanel(QWidget):
                 kwargs[p.name] = w.text().strip()
         return "." + spec.command.format(**kwargs)
 
+    def get_config(self) -> dict:
+        """Return a JSON-serialisable dict describing the current analysis setup."""
+        key = self.selected_key()
+        if key is None:
+            return {"key": None}
+        idx = self._combo.currentIndex()
+        widgets = self._param_widgets[idx]
+        params: dict[str, str] = {}
+        for p in ANALYSES[key].params:
+            w = widgets[p.name]
+            if isinstance(w, QComboBox):
+                params[p.name] = w.currentText()
+            else:
+                assert isinstance(w, QLineEdit)
+                params[p.name] = w.text().strip()
+        return {"key": key, "params": params}
+
+    def set_config(self, cfg: dict) -> None:
+        """Restore analysis setup from a dict previously returned by get_config()."""
+        key = cfg.get("key")
+        if key is None:
+            self._combo.setCurrentIndex(0)
+            return
+        for i, k in enumerate(ANALYSIS_KEY_ORDER):
+            if k == key:
+                self._combo.setCurrentIndex(i + 1)
+                break
+        else:
+            return
+        params = cfg.get("params", {})
+        idx = self._combo.currentIndex()
+        widgets = self._param_widgets[idx]
+        for p in ANALYSES[key].params:
+            w = widgets.get(p.name)
+            if w is None:
+                continue
+            val = params.get(p.name, "")
+            if isinstance(w, QComboBox):
+                i = w.findText(val)
+                if i >= 0:
+                    w.setCurrentIndex(i)
+            else:
+                assert isinstance(w, QLineEdit)
+                w.setText(val)
+
     def validate(self) -> list[str]:
         """Return a list of human-readable error messages for missing required fields."""
         key = self.selected_key()

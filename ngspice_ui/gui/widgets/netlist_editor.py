@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QStringListModel
+from PySide6.QtCore import Qt, QStringListModel, Signal
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCompleter,
@@ -41,8 +42,12 @@ def _error_fmt() -> QTextCharFormat:
 
 
 class NetlistEditor(QPlainTextEdit):
+    modification_changed = Signal(bool)
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._current_path: Path | None = None
+
         font = QFont("Monospace", 10)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
@@ -63,6 +68,31 @@ class NetlistEditor(QPlainTextEdit):
         self._completer.activated.connect(self._insert_completion)
 
         self.textChanged.connect(self._refresh_completions)
+        self.document().modificationChanged.connect(self.modification_changed)
+
+    # ------------------------------------------------------------------
+    # Path / dirty tracking
+    # ------------------------------------------------------------------
+
+    @property
+    def current_path(self) -> Path | None:
+        return self._current_path
+
+    @property
+    def is_modified(self) -> bool:
+        return self.document().isModified()
+
+    def set_content(self, text: str, path: Path | None = None) -> None:
+        """Replace editor content and clear the modified flag."""
+        self._current_path = path
+        self.setPlainText(text)
+        self.document().setModified(False)
+
+    def mark_saved(self, path: Path | None = None) -> None:
+        """Clear the modified flag; optionally update the current path."""
+        if path is not None:
+            self._current_path = path
+        self.document().setModified(False)
 
     # ------------------------------------------------------------------
     # Auto-complete
