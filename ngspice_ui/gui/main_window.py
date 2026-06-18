@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
         ctrl.sim_finished.connect(self._on_sim_finished)
         ctrl.plot_init.connect(self._plot.on_init_data)
         ctrl.plot_data.connect(self._plot.on_data_points)
+        ctrl.errors_changed.connect(self._editor.mark_errors)
 
     # ------------------------------------------------------------------
     # Action handlers
@@ -141,6 +142,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _run(self) -> None:
+        self._editor.clear_errors()
         text = self._editor.toPlainText().strip()
         if not text:
             QMessageBox.warning(self, "No Netlist", "Enter or load a netlist first.")

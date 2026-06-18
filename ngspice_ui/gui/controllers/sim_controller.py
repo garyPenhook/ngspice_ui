@@ -6,8 +6,12 @@ re-emits events as Qt signals — no widget access from callback threads.
 from __future__ import annotations
 
 import queue
+import re
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
+
+_ERR_MSG_RE = re.compile(r"\b(?:error|fatal)\b", re.IGNORECASE)
+_ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
 
 from ngspice_ui.engine.callbacks import (
     BGThreadEvent,
@@ -29,12 +33,14 @@ class SimController(QObject):
     sim_started = Signal()
     sim_finished = Signal()
     progress = Signal(int)
-    plot_init = Signal(object)   # InitDataEvent — emitted when a new sim begins
-    plot_data = Signal(object)   # list[DataPointEvent] — batched per drain cycle
+    plot_init = Signal(object)    # InitDataEvent — emitted when a new sim begins
+    plot_data = Signal(object)    # list[DataPointEvent] — batched per drain cycle
+    errors_changed = Signal(list) # list[tuple[int, str]] — (1-based lineno, msg)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._session = NgSpiceSession()
+        self._pending_errors: list[tuple[int, str]] = []
         self._drain_timer = QTimer(self)
         self._drain_timer.setInterval(50)
         self._drain_timer.timeout.connect(self._drain_queue)
@@ -61,6 +67,7 @@ class SimController(QObject):
             self.output_line.emit(f"run error: {exc}")
 
     def run_with_analysis(self, netlist: str, analysis_line: str | None) -> None:
+        self._pending_errors.clear()
         """Load *netlist* text, optionally override its analysis command, then bg_run.
 
         When *analysis_line* is not None (e.g. '.tran 1us 1ms'), any existing
@@ -118,6 +125,11 @@ class SimController(QObject):
             match event:
                 case CharEvent(line=line):
                     self.output_line.emit(line)
+                    if _ERR_MSG_RE.search(line):
+                        m = _ERR_LINE_RE.search(line)
+                        if m:
+                            self._pending_errors.append((int(m.group(1)), line))
+                            self.errors_changed.emit(list(self._pending_errors))
                 case StatEvent(message=msg, percent=pct):
                     self.output_line.emit(f"[{pct:3d}%] {msg}")
                     self.progress.emit(pct)
