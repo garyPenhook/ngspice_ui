@@ -1,0 +1,9 @@
+RC Low-Pass Filter
+* 1kHz corner: R=1k, C=159.15nF (1/(2*pi*1k*159.15n) ≈ 1kHz)
+V1 in 0 AC 1 SIN(0 1 1k)
+R1 in out 1k
+C1 out 0 159.15n
+.ac dec 10 10 100k
+.tran 10u 3m
+.op
+.end
