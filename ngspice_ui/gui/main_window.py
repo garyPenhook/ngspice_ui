@@ -24,6 +24,7 @@ from .widgets.cosim_widget import CoSimWidget
 from .widgets.measurements_widget import MeasurementsWidget
 from .widgets.netlist_editor import NetlistEditor
 from .widgets.plot_canvas import PlotLab
+from .widgets.schematic_view import SchematicView
 from .widgets.script_widget import ScriptWidget
 
 _ORG = "ngspice-ui"
@@ -48,6 +49,7 @@ class MainWindow(QMainWindow):
         self._build_console_dock()
         self._build_measurements_dock()
         self._build_script_dock()
+        self._build_schematic_dock()
         self._connect_signals()
         self._restore_geometry()
         self._set_status("Ready")
@@ -184,6 +186,18 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._measurements_dock)
         self.tabifyDockWidget(self._console_dock, self._measurements_dock)
 
+    def _build_schematic_dock(self) -> None:
+        self._schematic_view = SchematicView()
+        self._schematic_dock = QDockWidget("Schematic", self)
+        self._schematic_dock.setWidget(self._schematic_view)
+        self._schematic_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._schematic_dock)
+        self.tabifyDockWidget(self._console_dock, self._schematic_dock)
+        self._schematic_dock.hide()
+
     def _build_script_dock(self) -> None:
         self._script = ScriptWidget()
         self._cosim = CoSimWidget()
@@ -275,6 +289,11 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(self, "Schematic Import Error", str(exc))
                 return
+            # Load graphical viewer for KiCad files
+            if p.suffix.lower() == ".kicad_sch":
+                self._schematic_view.load(p)
+                self._schematic_dock.show()
+                self._schematic_dock.raise_()
         else:
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
