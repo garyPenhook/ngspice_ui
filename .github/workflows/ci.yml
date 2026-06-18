@@ -24,10 +24,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install system deps (Qt offscreen + libngspice stub)
+      - name: Install system deps (Qt offscreen + libngspice)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
+            ngspice libngspice0 libngspice0-dev \
             libgles2 libgl1 libegl1 \
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
             libxcb-randr0 libxcb-render-util0 libxcb-shape0 \

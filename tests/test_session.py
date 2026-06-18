@@ -1,5 +1,6 @@
 """Integration tests for NgSpiceSession against a real libngspice."""
 
+import ctypes.util
 import queue
 import time
 
@@ -7,6 +8,11 @@ import pytest
 
 from ngspice_ui.engine.callbacks import BGThreadEvent, CharEvent
 from ngspice_ui.engine.session import NgSpiceSession
+
+pytestmark = pytest.mark.skipif(
+    ctypes.util.find_library("ngspice") is None,
+    reason="libngspice not installed on this system",
+)
 
 RC_NETLIST = [
     "RC Low-Pass Filter test",
