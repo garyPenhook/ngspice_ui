@@ -17,7 +17,7 @@ from .controllers.sim_controller import SimController
 from .widgets.analysis_panel import AnalysisPanel
 from .widgets.console import ConsoleWidget
 from .widgets.netlist_editor import NetlistEditor
-from .widgets.plot_canvas import PlotCanvas
+from .widgets.plot_canvas import PlotLab
 
 
 class MainWindow(QMainWindow):
@@ -75,7 +75,7 @@ class MainWindow(QMainWindow):
     def _build_central(self) -> None:
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self._editor = NetlistEditor()
-        self._plot = PlotCanvas()
+        self._plot = PlotLab()
         splitter.addWidget(self._editor)
         splitter.addWidget(self._plot)
         splitter.setStretchFactor(0, 2)
@@ -107,6 +107,8 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         ctrl = self._controller
 
+        self._plot.set_session(ctrl.session)
+
         self._act_open.triggered.connect(self._open_file)
         self._act_run.triggered.connect(self._run)
         self._act_stop.triggered.connect(self._stop)
@@ -117,6 +119,8 @@ class MainWindow(QMainWindow):
         ctrl.progress.connect(self._progress.setValue)
         ctrl.sim_started.connect(self._on_sim_started)
         ctrl.sim_finished.connect(self._on_sim_finished)
+        ctrl.plot_init.connect(self._plot.on_init_data)
+        ctrl.plot_data.connect(self._plot.on_data_points)
 
     # ------------------------------------------------------------------
     # Action handlers
@@ -165,7 +169,7 @@ class MainWindow(QMainWindow):
         if not plot_name or plot_name == "const":
             self._console.append_line("-- no simulation data to plot --")
             return
-        self._plot.plot(self._controller.session, plot_name)
+        self._plot.refresh_from_session()
 
     # ------------------------------------------------------------------
     # Simulation state

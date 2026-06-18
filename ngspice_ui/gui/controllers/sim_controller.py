@@ -29,6 +29,8 @@ class SimController(QObject):
     sim_started = Signal()
     sim_finished = Signal()
     progress = Signal(int)
+    plot_init = Signal(object)   # InitDataEvent — emitted when a new sim begins
+    plot_data = Signal(object)   # list[DataPointEvent] — batched per drain cycle
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -107,6 +109,7 @@ class SimController(QObject):
     @Slot()
     def _drain_queue(self) -> None:
         q = self._session.event_queue
+        data_events: list = []
         while True:
             try:
                 event = q.get_nowait()
@@ -124,7 +127,10 @@ class SimController(QObject):
                     self.sim_started.emit()
                 case BGThreadEvent(running=False):
                     self.sim_finished.emit()
-                case InitDataEvent(plot_name=name, plot_type=typ):
-                    self.output_line.emit(f"-- plot: {name} ({typ}) --")
-                case DataPointEvent():
-                    pass  # real-time streaming: phase 4
+                case InitDataEvent() as e:
+                    self.output_line.emit(f"-- plot: {e.plot_name} ({e.plot_type}) --")
+                    self.plot_init.emit(e)
+                case DataPointEvent() as e:
+                    data_events.append(e)
+        if data_events:
+            self.plot_data.emit(data_events)
