@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -47,49 +47,72 @@ _C_VALUE    = QColor("#a0a080")
 
 @dataclass
 class _Wire:
-    x1: float; y1: float; x2: float; y2: float
+    x1: float
+    y1: float
+    x2: float
+    y2: float
     is_bus: bool = False
+
 
 @dataclass
 class _Junction:
-    x: float; y: float
+    x: float
+    y: float
+
 
 @dataclass
 class _NoConnect:
-    x: float; y: float
+    x: float
+    y: float
+
 
 @dataclass
 class _Label:
     text: str
-    x: float; y: float
+    x: float
+    y: float
     angle: float
     kind: str  # 'local' | 'global' | 'hier' | 'power'
 
+
 @dataclass
 class _LibGraphic:
-    kind: str                              # 'polyline'|'circle'|'arc'|'pin'
+    kind: str  # 'polyline'|'circle'|'arc'|'pin'
     pts: list = field(default_factory=list)
     filled: bool = False
-    cx: float = 0; cy: float = 0; radius: float = 0
+    cx: float = 0
+    cy: float = 0
+    radius: float = 0
     pin_angle: float = 0
     pin_length: float = 0
     pin_name: str = ''
     pin_number: str = ''
+
 
 @dataclass
 class _SymDef:
     lib_id: str
     graphics: list[_LibGraphic] = field(default_factory=list)
 
+
 @dataclass
 class _PlacedSym:
     lib_id: str
-    x: float; y: float
+    x: float
+    y: float
     angle: float
-    mirror_x: bool; mirror_y: bool
-    reference: str; value: str
-    ref_x: float = 0; ref_y: float = 0; ref_angle: float = 0; hide_ref: bool = False
-    val_x: float = 0; val_y: float = 0; val_angle: float = 0; hide_val: bool = False
+    mirror_x: bool
+    mirror_y: bool
+    reference: str
+    value: str
+    ref_x: float = 0
+    ref_y: float = 0
+    ref_angle: float = 0
+    hide_ref: bool = False
+    val_x: float = 0
+    val_y: float = 0
+    val_angle: float = 0
+    hide_val: bool = False
 
 @dataclass
 class _Schematic:
@@ -107,7 +130,11 @@ class _Schematic:
 
 
 def _build_net_connectivity(sch: _Schematic) -> None:
-    """Union-Find wire connectivity → populate wire_net and net_names."""
+    """Union-Find wire connectivity → populate wire_net and net_names.
+
+    Uses an endpoint → [wire_index] dict for O(n) union-find construction
+    instead of O(n²) pairwise comparison.
+    """
     parent: list[int] = list(range(len(sch.wires)))
 
     def find(x: int) -> int:
@@ -121,29 +148,31 @@ def _build_net_connectivity(sch: _Schematic) -> None:
         if pa != pb:
             parent[pa] = pb
 
-    eps = 1e-6
+    # Round endpoints to a fixed grid to make float equality robust
+    _GRID = 1e-4
 
-    def pt_match(ax, ay, bx, by):
-        return abs(ax - bx) < eps and abs(ay - by) < eps
+    def _snap(v: float) -> int:
+        return round(v / _GRID)
 
-    for i, wi in enumerate(sch.wires):
-        for j, wj in enumerate(sch.wires):
-            if j <= i:
-                continue
-            for ax, ay in ((wi.x1, wi.y1), (wi.x2, wi.y2)):
-                for bx, by in ((wj.x1, wj.y1), (wj.x2, wj.y2)):
-                    if pt_match(ax, ay, bx, by):
-                        union(i, j)
-
+    # Build endpoint → list of wire indices in O(n)
+    endpoint_map: dict[tuple[int, int], list[int]] = {}
     for i, w in enumerate(sch.wires):
+        for sx, sy in ((_snap(w.x1), _snap(w.y1)), (_snap(w.x2), _snap(w.y2))):
+            endpoint_map.setdefault((sx, sy), []).append(i)
+
+    # Union all wires that share an endpoint
+    for wires_at_pt in endpoint_map.values():
+        for k in range(1, len(wires_at_pt)):
+            union(wires_at_pt[0], wires_at_pt[k])
+
+    for i in range(len(sch.wires)):
         sch.wire_net[i] = find(i)
 
-    # Map labels to nets
+    # Map labels to nets via the same endpoint dict
     for lbl in sch.labels:
-        for i, w in enumerate(sch.wires):
-            for wx, wy in ((w.x1, w.y1), (w.x2, w.y2)):
-                if pt_match(lbl.x, lbl.y, wx, wy):
-                    sch.net_names[find(i)] = lbl.text
+        key = (_snap(lbl.x), _snap(lbl.y))
+        for wire_idx in endpoint_map.get(key, []):
+            sch.net_names[find(wire_idx)] = lbl.text
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +180,8 @@ def _build_net_connectivity(sch: _Schematic) -> None:
 # ---------------------------------------------------------------------------
 
 def _parse_sexp(text: str) -> list:
-    pos = 0; n = len(text)
+    pos = 0
+    n = len(text)
 
     def skip_ws():
         nonlocal pos
@@ -165,26 +195,31 @@ def _parse_sexp(text: str) -> list:
             return None
         c = text[pos]
         if c == '(':
-            pos += 1; children = []
+            pos += 1
+            children = []
             while True:
                 skip_ws()
                 if pos >= n or text[pos] == ')':
-                    if pos < n: pos += 1
+                    if pos < n:
+                        pos += 1
                     break
                 child = read_node()
                 if child is not None:
                     children.append(child)
             return children
         elif c == '"':
-            pos += 1; parts: list[str] = []
+            pos += 1
+            parts: list[str] = []
             while pos < n and text[pos] != '"':
                 if text[pos] == '\\':
                     pos += 1
-                    if pos < n: parts.append(text[pos])
+                    if pos < n:
+                        parts.append(text[pos])
                 else:
                     parts.append(text[pos])
                 pos += 1
-            if pos < n: pos += 1
+            if pos < n:
+                pos += 1
             return ''.join(parts)
         else:
             start = pos
@@ -230,7 +265,9 @@ def _arc_path(sx: float, sy: float, mx: float, my: float,
               ex: float, ey: float, steps: int = 32) -> QPainterPath:
     d = 2*(sx*(my-ey) + mx*(ey-sy) + ex*(sy-my))
     if abs(d) < 1e-10:
-        path = QPainterPath(); path.moveTo(sx, sy); path.lineTo(ex, ey)
+        path = QPainterPath()
+        path.moveTo(sx, sy)
+        path.lineTo(ex, ey)
         return path
     ux = ((sx*sx+sy*sy)*(my-ey) + (mx*mx+my*my)*(ey-sy) + (ex*ex+ey*ey)*(sy-my)) / d
     uy = ((sx*sx+sy*sy)*(ex-mx) + (mx*mx+my*my)*(sx-ex) + (ex*ex+ey*ey)*(mx-sx)) / d
@@ -249,8 +286,10 @@ def _arc_path(sx: float, sy: float, mx: float, my: float,
         a = a0 + span * t
         xp = ux + r * math.cos(a)
         yp = uy + r * math.sin(a)
-        if i == 0: path.moveTo(xp, yp)
-        else:       path.lineTo(xp, yp)
+        if i == 0:
+            path.moveTo(xp, yp)
+        else:
+            path.lineTo(xp, yp)
     return path
 
 
@@ -276,7 +315,8 @@ def _parse_graphics(node: list, out: list[_LibGraphic]) -> None:
         out.append(_LibGraphic(kind='polyline', pts=pts2, filled=_is_filled(poly)))
 
     for rect in _find_all(node, 'rectangle'):
-        s = _find(rect, 'start'); e = _find(rect, 'end')
+        s = _find(rect, 'start')
+        e = _find(rect, 'end')
         if s is None or e is None:
             continue
         x1, y1 = float(_atom(s, 1, '0')), float(_atom(s, 2, '0'))
@@ -285,7 +325,8 @@ def _parse_graphics(node: list, out: list[_LibGraphic]) -> None:
         out.append(_LibGraphic(kind='polyline', pts=pts, filled=_is_filled(rect)))
 
     for circ in _find_all(node, 'circle'):
-        c = _find(circ, 'center'); rn = _find(circ, 'radius')
+        c = _find(circ, 'center')
+        rn = _find(circ, 'radius')
         if c is None or rn is None:
             continue
         out.append(_LibGraphic(kind='circle',
@@ -293,7 +334,9 @@ def _parse_graphics(node: list, out: list[_LibGraphic]) -> None:
                                radius=float(_atom(rn,1,'0')), filled=_is_filled(circ)))
 
     for arc in _find_all(node, 'arc'):
-        s = _find(arc, 'start'); m = _find(arc, 'mid'); e = _find(arc, 'end')
+        s = _find(arc, 'start')
+        m = _find(arc, 'mid')
+        e = _find(arc, 'end')
         if None in (s, m, e):
             continue
         out.append(_LibGraphic(kind='arc', pts=[
@@ -307,7 +350,8 @@ def _parse_graphics(node: list, out: list[_LibGraphic]) -> None:
         if at is None:
             continue
         ln = _find(pin, 'length')
-        num_n = _find(pin, 'number'); name_n = _find(pin, 'name')
+        num_n = _find(pin, 'number')
+        name_n = _find(pin, 'name')
         out.append(_LibGraphic(
             kind='pin',
             pts=[(float(_atom(at,1,'0')), float(_atom(at,2,'0')))],
@@ -329,10 +373,12 @@ def _parse_schematic(path: Path) -> _Schematic:
         raise ValueError(f"Not a valid KiCad 6/7 .kicad_sch: {path.name}")
 
     sch = _Schematic()
-    xs: list[float] = []; ys: list[float] = []
+    xs: list[float] = []
+    ys: list[float] = []
 
     def _track(x: float, y: float) -> None:
-        xs.append(x); ys.append(y)
+        xs.append(x)
+        ys.append(y)
 
     # -- Wires & buses --
     for tag, is_bus in (('wire', False), ('bus_wire', False), ('bus', True)):
@@ -342,35 +388,39 @@ def _parse_schematic(path: Path) -> _Schematic:
                 continue
             xys = _find_all(pts, 'xy')
             if len(xys) >= 2:
-                x1,y1 = float(_atom(xys[0],1,'0')), float(_atom(xys[0],2,'0'))
-                x2,y2 = float(_atom(xys[1],1,'0')), float(_atom(xys[1],2,'0'))
-                sch.wires.append(_Wire(x1,y1,x2,y2, is_bus=(tag=='bus')))
-                _track(x1,y1); _track(x2,y2)
+                x1, y1 = float(_atom(xys[0], 1, '0')), float(_atom(xys[0], 2, '0'))
+                x2, y2 = float(_atom(xys[1], 1, '0')), float(_atom(xys[1], 2, '0'))
+                sch.wires.append(_Wire(x1, y1, x2, y2, is_bus=(tag == 'bus')))
+                _track(x1, y1)
+                _track(x2, y2)
 
     # -- Junctions --
     for j in _find_all(root, 'junction'):
         at = _find(j, 'at')
         if at:
-            x,y = float(_atom(at,1,'0')), float(_atom(at,2,'0'))
-            sch.junctions.append(_Junction(x,y)); _track(x,y)
+            x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
+            sch.junctions.append(_Junction(x, y))
+            _track(x, y)
 
     # -- No-connects --
     for nc in _find_all(root, 'no_connect'):
         at = _find(nc, 'at')
         if at:
-            x,y = float(_atom(at,1,'0')), float(_atom(at,2,'0'))
-            sch.noconns.append(_NoConnect(x,y)); _track(x,y)
+            x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
+            sch.noconns.append(_NoConnect(x, y))
+            _track(x, y)
 
     # -- Labels --
-    for tag, kind in (('label','local'),('global_label','global'),
-                      ('hierarchical_label','hier')):
+    for tag, kind in (('label', 'local'), ('global_label', 'global'),
+                      ('hierarchical_label', 'hier')):
         for lbl in _find_all(root, tag):
             name = _atom(lbl, 1)
             at = _find(lbl, 'at')
             if name and at:
-                x,y = float(_atom(at,1,'0')), float(_atom(at,2,'0'))
-                a = float(_atom(at,3,'0'))
-                sch.labels.append(_Label(name, x, y, a, kind)); _track(x,y)
+                x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
+                a = float(_atom(at, 3, '0'))
+                sch.labels.append(_Label(name, x, y, a, kind))
+                _track(x, y)
 
     # -- Lib symbol definitions --
     ls = _find(root, 'lib_symbols')
@@ -397,10 +447,10 @@ def _parse_schematic(path: Path) -> _Schematic:
             # treat power symbols as labels
             at = _find(sym, 'at')
             if at:
-                x,y = float(_atom(at,1,'0')), float(_atom(at,2,'0'))
+                x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
                 pname = _prop(sym, 'Value') or lib_id.split(':')[-1]
                 sch.labels.append(_Label(pname, x, y, 0.0, 'power'))
-                _track(x,y)
+                _track(x, y)
             continue
 
         ref = _prop(sym, 'Reference')
@@ -410,17 +460,24 @@ def _parse_schematic(path: Path) -> _Schematic:
         at = _find(sym, 'at')
         if at is None:
             continue
-        sx = float(_atom(at,1,'0')); sy_ = float(_atom(at,2,'0'))
-        sa = float(_atom(at,3,'0'))
+        sx = float(_atom(at, 1, '0'))
+        sy_ = float(_atom(at, 2, '0'))
+        sa = float(_atom(at, 3, '0'))
         mir = _find(sym, 'mirror')
-        mx_ = isinstance(mir, list) and _atom(mir,1) == 'x'
-        my_ = isinstance(mir, list) and _atom(mir,1) == 'y'
+        mx_ = isinstance(mir, list) and _atom(mir, 1) == 'x'
+        my_ = isinstance(mir, list) and _atom(mir, 1) == 'y'
 
         value = _prop(sym, 'Value')
 
         # Property positions (absolute in placed symbol)
-        ref_x = sx; ref_y = sy_; ref_a = 0.0; hide_ref = False
-        val_x = sx; val_y = sy_; val_a = 0.0; hide_val = False
+        ref_x = sx
+        ref_y = sy_
+        ref_a = 0.0
+        hide_ref = False
+        val_x = sx
+        val_y = sy_
+        val_a = 0.0
+        hide_val = False
         for prop in _find_all(sym, 'property'):
             pname = _atom(prop, 1)
             pat = _find(prop, 'at')
@@ -579,14 +636,15 @@ class _SchCanvas(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         pos = event.position()
         mods = event.modifiers()
-        if event.button() == Qt.MouseButton.LeftButton and mods & Qt.KeyboardModifier.ControlModifier:
+        ctrl = mods & Qt.KeyboardModifier.ControlModifier
+        if event.button() == Qt.MouseButton.LeftButton and ctrl:
             # Ctrl+click → probe net
             net_id = self._net_at(pos.x(), pos.y())
             if net_id is not None and self._sch is not None:
                 name = self._sch.net_names.get(net_id, f"net{net_id}")
                 self.net_probed.emit(name)
             return
-        if event.button() == Qt.MouseButton.LeftButton and not (mods & Qt.KeyboardModifier.ControlModifier):
+        if event.button() == Qt.MouseButton.LeftButton and not ctrl:
             net_id = self._net_at(pos.x(), pos.y())
             if net_id is not None:
                 self._highlighted_net = net_id if self._highlighted_net != net_id else None
@@ -813,9 +871,15 @@ class SchematicView(QWidget):
         self._canvas = _SchCanvas()
         self._canvas.net_probed.connect(self.net_probed)
 
-        btn_fit  = QToolButton(); btn_fit.setText("Fit");  btn_fit.setFixedWidth(36)
-        btn_in   = QToolButton(); btn_in.setText("+");     btn_in.setFixedWidth(28)
-        btn_out  = QToolButton(); btn_out.setText("−");    btn_out.setFixedWidth(28)
+        btn_fit = QToolButton()
+        btn_fit.setText("Fit")
+        btn_fit.setFixedWidth(36)
+        btn_in = QToolButton()
+        btn_in.setText("+")
+        btn_in.setFixedWidth(28)
+        btn_out = QToolButton()
+        btn_out.setText("−")
+        btn_out.setFixedWidth(28)
         self._info = QLabel()
         self._info.setStyleSheet("color: #808080; font-size: 9pt;")
 

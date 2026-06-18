@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
@@ -29,6 +29,8 @@ class MeasurementsWidget(QWidget):
         np.max(vec("v(out)")) - np.max(vec("v(in)"))   # delta
     """
 
+    changed = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._session = None
@@ -39,6 +41,7 @@ class MeasurementsWidget(QWidget):
 
         self._table = QTableWidget(0, 3)
         self._table.setHorizontalHeaderLabels(["Name", "Expression", "Value"])
+        self._table.itemChanged.connect(self.changed)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -105,15 +108,24 @@ class MeasurementsWidget(QWidget):
         def _vec(name: str) -> np.ndarray:
             for candidate in (name, f"{plot}.{name}"):
                 try:
-                    return self._session.get_vector(candidate).data.real
+                    return self._session.get_vector(candidate).data
                 except Exception:
                     pass
             raise KeyError(f"vector not found: {name!r}")
 
         ns: dict = {
-            "__builtins__": __builtins__,
+            "__builtins__": {},   # no builtins — prevents exec/open/import in loaded projects
             "np": np,
             "math": math,
+            "abs": abs,
+            "round": round,
+            "min": min,
+            "max": max,
+            "sum": sum,
+            "len": len,
+            "float": float,
+            "int": int,
+            "bool": bool,
             "vec": _vec,
         }
 

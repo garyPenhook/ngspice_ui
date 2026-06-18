@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QRect, QSize, QStringListModel, Signal, Slot
+from PySide6.QtCore import QRect, QSize, QStringListModel, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -14,9 +14,10 @@ from PySide6.QtGui import (
     QTextCursor,
 )
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QCompleter,
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -336,9 +337,12 @@ class _FindBar(QWidget):
         if backward:
             flags |= QTextDocument.FindFlag.FindBackward
         if isinstance(pat, re.Pattern):
-            new_cursor = doc.find(pat.pattern, cursor,
-                                   QTextDocument.FindFlag.FindCaseSensitively if self._case_cb.isChecked()
-                                   else QTextDocument.FindFlag(0))
+            case_flag = (
+                QTextDocument.FindFlag.FindCaseSensitively
+                if self._case_cb.isChecked()
+                else QTextDocument.FindFlag(0)
+            )
+            new_cursor = doc.find(pat.pattern, cursor, case_flag)
         else:
             new_cursor = doc.find(pat, cursor, flags)
         if new_cursor.isNull():
@@ -378,7 +382,6 @@ class _FindBar(QWidget):
         cursor = QTextCursor(doc)
         cursor.beginEditBlock()
         count = 0
-        from PySide6.QtGui import QTextDocument
         flags = self._flags()
         while True:
             if isinstance(pat, re.Pattern):
@@ -603,7 +606,6 @@ class NetlistEditor(QWidget):
 # Simple read-only viewer for .include files
 # ---------------------------------------------------------------------------
 
-from PySide6.QtWidgets import QDialog, QDialogButtonBox
 
 
 class _IncludeViewer(QDialog):

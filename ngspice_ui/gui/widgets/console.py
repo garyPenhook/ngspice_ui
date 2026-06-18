@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Slot
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,

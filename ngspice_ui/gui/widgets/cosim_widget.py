@@ -20,10 +20,10 @@ Optional sync expression:
   Return a positive float to request a shorter time step, or None / omit
   to accept ngspice's own delta.
 
-Netlist: declare any standard V/I source; ngspice will call the registered
-callback for sources it identifies as externally controlled.
+Netlist: declare external sources with the ``external`` keyword so ngspice
+triggers the registered callbacks.  Using ``dc 0`` instead produces no callbacks.
 Example:
-  Vext n_hi n_lo dc 0
+  Vext n_hi n_lo external
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import math
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -43,7 +43,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QTableWidget,
@@ -52,7 +51,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_EXPR_SCOPE = {"__builtins__": __builtins__, "math": math, "np": np}
+_EXPR_SCOPE = {"__builtins__": {}, "math": math, "np": np, "abs": abs, "float": float}
 
 
 def _compile_expr(expr: str, label: str):
@@ -66,6 +65,8 @@ def _compile_expr(expr: str, label: str):
 
 class CoSimWidget(QWidget):
     """Table-driven co-simulation source editor."""
+
+    changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -91,7 +92,9 @@ class CoSimWidget(QWidget):
 
         # Table
         self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["En", "Source name", "Type", "Expression  f(t, name)"])
+        self._table.setHorizontalHeaderLabels(
+            ["En", "Source name", "Type", "Expression  f(t, name)"]
+        )
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -126,6 +129,8 @@ class CoSimWidget(QWidget):
         tbl_btns.addStretch()
 
         # Sync expression
+        self._table.itemChanged.connect(self.changed)
+
         sync_row = QHBoxLayout()
         sync_row.addWidget(QLabel("Sync  δ(t, old_δ):"))
         self._sync_edit = QLineEdit()
@@ -134,6 +139,7 @@ class CoSimWidget(QWidget):
         self._sync_edit.setToolTip(
             "Delta-time negotiation: return a new step length or leave blank to accept ngspice's."
         )
+        self._sync_edit.textChanged.connect(self.changed)
         sync_row.addWidget(self._sync_edit)
 
         # Apply + status
@@ -251,7 +257,7 @@ class CoSimWidget(QWidget):
                 def sync_fn(t, old_delta, _raw=_raw):
                     result = _raw(t, old_delta)
                     return float(result) if result is not None else None
-            except ValueError as exc:
+            except ValueError:
                 # Retry with correct signature lambda(t, old_delta)
                 try:
                     src = f"lambda t, old_delta, math=math, np=np: ({sync_expr})"

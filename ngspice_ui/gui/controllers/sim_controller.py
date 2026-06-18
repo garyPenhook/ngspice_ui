@@ -10,9 +10,6 @@ import re
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
-_ERR_MSG_RE = re.compile(r"\b(?:error|fatal)\b", re.IGNORECASE)
-_ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
-
 from ngspice_ui.engine.callbacks import (
     BGThreadEvent,
     CharEvent,
@@ -23,8 +20,11 @@ from ngspice_ui.engine.callbacks import (
 )
 from ngspice_ui.engine.session import NgSpiceSession
 
-_ANALYSIS_PREFIXES: tuple[str, ...] = tuple(
-    "." + k for k in ("tran", "ac", "dc", "op", "noise", "tf", "sens", "pz", "disto")
+_ERR_MSG_RE = re.compile(r"\b(?:error|fatal)\b", re.IGNORECASE)
+_ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
+
+_ANALYSIS_KEYWORDS: frozenset[str] = frozenset(
+    ("tran", "ac", "dc", "op", "noise", "tf", "sens", "pz", "disto")
 )
 
 
@@ -84,14 +84,17 @@ class SimController(QObject):
                 s = ln.strip().lower()
                 if s == ".end":
                     continue
-                if any(s.startswith(pfx) for pfx in _ANALYSIS_PREFIXES):
-                    continue
+                # Match the exact dot-keyword (first token), not a prefix
+                if s.startswith("."):
+                    token = s[1:].split()[0] if s[1:].split() else ""
+                    if token in _ANALYSIS_KEYWORDS:
+                        continue
                 filtered.append(ln)
             filtered.append(analysis_line)
             lines = filtered
         if extra_lines:
-            # Insert after title line (line 0) or at start
-            insert_at = 1 if lines and lines[0].strip().startswith("*") else 0
+            # SPICE title is always line 0 regardless of content; insert after it
+            insert_at = 1 if lines else 0
             lines = lines[:insert_at] + list(extra_lines) + lines[insert_at:]
         try:
             self._session.load_netlist(lines)
@@ -123,10 +126,13 @@ class SimController(QObject):
         except RuntimeError as exc:
             self.output_line.emit(f"resume error: {exc}")
 
+    _MAX_DATA_EVENTS_PER_DRAIN = 200
+
     @Slot()
     def _drain_queue(self) -> None:
         q = self._session.event_queue
         data_events: list = []
+        data_cap = self._MAX_DATA_EVENTS_PER_DRAIN
         while True:
             try:
                 event = q.get_nowait()
@@ -154,5 +160,8 @@ class SimController(QObject):
                     self.plot_init.emit(e)
                 case DataPointEvent() as e:
                     data_events.append(e)
+                    data_cap -= 1
+                    if data_cap <= 0:
+                        break   # yield to the GUI; next tick drains the rest
         if data_events:
             self.plot_data.emit(data_events)

@@ -11,8 +11,10 @@ from __future__ import annotations
 import ctypes
 import queue
 import threading
-from ctypes import c_char_p, c_int, cast, create_string_buffer, POINTER
+from ctypes import c_char_p, c_int
 from typing import Callable
+
+import numpy as np
 
 from .bindings import NgSpiceNotFoundError, get_lib  # noqa: F401 (re-exported)
 from .callbacks import SimEvent, build_callbacks
@@ -96,13 +98,13 @@ class NgSpiceSession:
         """
         self._safe_halt()
 
-        clean = [l.rstrip() for l in lines]
+        clean = [ln.rstrip() for ln in lines]
         if not clean or clean[-1].strip().lower() != ".end":
             clean.append(".end")
 
         # Build array of c_char_p, NULL-terminated
         arr_type = c_char_p * (len(clean) + 1)
-        arr = arr_type(*(l.encode("utf-8") for l in clean), None)
+        arr = arr_type(*(ln.encode("utf-8") for ln in clean), None)
         ret = self._lib.ngSpice_Circ(arr)
         if ret != 0:
             raise RuntimeError(f"ngSpice_Circ returned {ret}")
@@ -112,11 +114,10 @@ class NgSpiceSession:
     # ------------------------------------------------------------------
 
     def _safe_halt(self, timeout: float = 3.0) -> None:
-        """Ensure no background simulation is running.
+        """Ensure no background simulation is running before calling ngSpice_Circ.
 
-        Issues bg_halt and polls up to *timeout* seconds. A bg sim that
-        refuses to stop within the timeout is left running — callers should
-        handle that case if it matters.
+        Raises RuntimeError if the bg thread does not stop within *timeout* seconds,
+        because calling ngSpice_Circ against a live thread risks libngspice races.
         """
         import time
         if not self._lib.ngSpice_running():
@@ -125,6 +126,11 @@ class NgSpiceSession:
         deadline = time.monotonic() + timeout
         while self._lib.ngSpice_running() and time.monotonic() < deadline:
             time.sleep(0.05)
+        if self._lib.ngSpice_running():
+            raise RuntimeError(
+                "bg simulation did not stop within timeout; "
+                "cannot safely load a new netlist"
+            )
 
     # ------------------------------------------------------------------
     # Command execution
@@ -226,14 +232,17 @@ class NgSpiceSession:
         any previously registered co-sim functions without unloading the
         interface).
 
-        Netlist side: declare external sources normally, e.g.
-            Vext n1 n2 dc 0
+        Netlist side: declare external sources with the ``external`` keyword, e.g.::
+
+            Vext n1 n2 external
+
         ngspice will call vsrc_fn whenever it needs the value of 'vext'.
+        Using ``dc 0`` instead of ``external`` produces no callbacks.
 
         The ctypes callback objects are kept alive on this session instance
         for the duration of the process (libngspice holds raw C pointers).
         """
-        from .bindings import CB_GetVSRCData, CB_GetISRCData, CB_GetSyncData
+        from .bindings import CB_GetISRCData, CB_GetSyncData, CB_GetVSRCData
 
         def _vsrc(voltage_ptr, time, srcname, srcindex, userdata):
             if vsrc_fn is not None:
@@ -298,8 +307,6 @@ class NgSpiceSession:
 # ---------------------------------------------------------------------------
 # VectorData helper
 # ---------------------------------------------------------------------------
-
-import numpy as np
 
 
 class VectorData:

@@ -4,14 +4,12 @@ import csv
 from pathlib import Path
 
 import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qt import NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import (
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -367,7 +365,7 @@ class _PlotPane(QWidget):
             try:
                 y = eval(expr, {"__builtins__": {}, "np": np, "vec": _vec})  # noqa: S307
                 results.append((label, np.asarray(y, dtype=float)))
-            except Exception as exc:
+            except Exception:
                 results.append((label, np.array([])))
         return results
 
@@ -466,7 +464,9 @@ class _PlotPane(QWidget):
                 self._ax.plot(y.real, label=label, color=color)
         if traces and traces[0][2] is not None:
             scale = next(
-                (v for v in self._plots_vecs.get(traces[0][0], []) if v.lower() in _SCALE_NAMES), "",
+                (v for v in self._plots_vecs.get(traces[0][0], [])
+                 if v.lower() in _SCALE_NAMES),
+                "",
             )
             self._ax.set_xlabel(scale)
         self._ax.legend(fontsize="small")
@@ -531,12 +531,18 @@ class _PlotPane(QWidget):
             color = _COLORS[i % len(_COLORS)]
             data = y.real
             n = len(data)
-            if n < 4:
+            if n < 4 or x is None or len(x) != n:
                 continue
-            dt = (x[-1] - x[0]) / (n - 1) if x is not None and len(x) == n else 1.0
-            freqs = np.fft.rfftfreq(n, d=dt)
-            spectrum = np.fft.rfft(data)
-            mag_db = 20 * np.log10(np.abs(spectrum) / n + 1e-300)
+            # ngspice transient uses adaptive step → resample to uniform grid
+            # before FFT so frequency bins are correct
+            t0, t1 = x[0], x[-1]
+            n_uniform = n
+            t_uniform = np.linspace(t0, t1, n_uniform)
+            data_uniform = np.interp(t_uniform, x, data)
+            dt = (t1 - t0) / (n_uniform - 1)
+            freqs = np.fft.rfftfreq(n_uniform, d=dt)
+            spectrum = np.fft.rfft(data_uniform)
+            mag_db = 20 * np.log10(np.abs(spectrum) / n_uniform + 1e-300)
             self._ax.plot(freqs[1:], mag_db[1:], label=vec_name, color=color)
         self._ax.set_xscale("log")
         self._ax.set_xlabel("Frequency (Hz)")
@@ -741,7 +747,11 @@ class PlotLab(QWidget):
     def _close_tab(self, idx: int) -> None:
         if idx == 0:
             return
+        widget = self._tabs.widget(idx)
         self._tabs.removeTab(idx)
+        if isinstance(widget, _PlotPane):
+            widget._redraw_timer.stop()
+            widget.deleteLater()
 
     def _pin_result(self) -> None:
         if self._session is None:

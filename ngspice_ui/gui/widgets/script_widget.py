@@ -20,11 +20,10 @@ import math
 import traceback
 
 import numpy as np
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QKeySequence, QTextCursor
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -36,6 +35,8 @@ from PySide6.QtWidgets import (
 
 class ScriptWidget(QWidget):
     """Interactive Python console wired to the simulation session."""
+
+    changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -87,6 +88,7 @@ class ScriptWidget(QWidget):
         )
         self._inp.setMaximumHeight(120)
         self._inp.installEventFilter(self)
+        self._inp.textChanged.connect(self.changed)
 
         btn_run = QPushButton("Run  Ctrl+↵")
         btn_run.setFixedWidth(110)
@@ -130,7 +132,6 @@ class ScriptWidget(QWidget):
 
     def eventFilter(self, obj, event) -> bool:
         from PySide6.QtCore import QEvent
-        from PySide6.QtGui import QKeyEvent
 
         if obj is self._inp and event.type() == QEvent.Type.KeyPress:
             key = event.key()

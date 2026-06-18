@@ -9,11 +9,10 @@ No Qt imports here; this module stays headless.
 
 from __future__ import annotations
 
-import queue
-from dataclasses import dataclass, field
-from typing import Any
-
 import ctypes
+import queue
+from dataclasses import dataclass
+from typing import Any
 
 from .bindings import (
     CB_BGThreadRunning,
@@ -25,7 +24,6 @@ from .bindings import (
     VecInfoAll,
     VecValuesAll,
 )
-
 
 # ---------------------------------------------------------------------------
 # Event dataclasses

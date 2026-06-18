@@ -1,12 +1,12 @@
 """Integration tests for NgSpiceSession against a real libngspice."""
 
-import math
 import queue
 import time
-import pytest
-from ngspice_ui.engine.session import NgSpiceSession
-from ngspice_ui.engine.callbacks import BGThreadEvent, CharEvent, InitDataEvent
 
+import pytest
+
+from ngspice_ui.engine.callbacks import BGThreadEvent, CharEvent
+from ngspice_ui.engine.session import NgSpiceSession
 
 RC_NETLIST = [
     "RC Low-Pass Filter test",

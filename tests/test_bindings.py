@@ -1,7 +1,7 @@
 """Tests for library discovery and raw ctypes bindings."""
 
-import os
 import pytest
+
 from ngspice_ui.engine.bindings import NgSpiceNotFoundError, _find_lib_path, get_lib
 
 

@@ -31,7 +31,7 @@ if not _ngspice_lib:
 _binaries = [(_ngspice_lib, ".")] if _ngspice_lib else []
 
 a = Analysis(
-    ["ngspice_ui/gui/app.py"],
+    ["ngspice_ui/__main__.py"],
     pathex=["."],
     binaries=_binaries,
     datas=[

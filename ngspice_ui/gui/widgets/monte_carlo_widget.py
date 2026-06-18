@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -51,10 +51,15 @@ class MonteCarloWidget(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._netlist: str = ""
+        self._netlist_getter = None
         self._build()
 
     def set_netlist(self, text: str) -> None:
         self._netlist = text
+
+    def set_netlist_getter(self, fn) -> None:
+        """Register a callable that returns the current netlist text on demand."""
+        self._netlist_getter = fn
 
     def _build(self) -> None:
         self._runs_edit = QLineEdit("20")
@@ -62,7 +67,9 @@ class MonteCarloWidget(QWidget):
 
         # Variation table: Reference | Nominal | Variation% | Distribution
         self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["Component", "Nominal", "Variation %", "Distribution"])
+        self._table.setHorizontalHeaderLabels(
+            ["Component", "Nominal", "Variation %", "Distribution"]
+        )
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -176,7 +183,10 @@ class MonteCarloWidget(QWidget):
                 variations.append((comp, nom, pct, dist))
 
         netlists = []
-        base = self._netlist
+        base = self._netlist_getter() if self._netlist_getter else self._netlist
+        if not base:
+            self._status.setText("No netlist — load or run a simulation first.")
+            return
         for _ in range(n_runs):
             text = base
             for comp, nom, pct, dist in variations:

@@ -6,10 +6,12 @@ build-backend = "hatchling.build"
 name = "ngspice-ui"
 version = "0.1.0"
 requires-python = ">=3.11"
+license = {text = "MIT"}
 dependencies = [
     "PySide6>=6.6",
     "numpy>=1.26",
     "matplotlib>=3.8",
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
@@ -17,7 +19,7 @@ fast-plot = ["pyqtgraph>=0.13"]
 dev = ["pytest>=8", "ruff>=0.4"]
 
 [project.scripts]
-ngspice-ui = "ngspice_ui.gui.app:main"
+ngspice-ui = "ngspice_ui.__main__:main"
 
 [tool.ruff]
 line-length = 100
@@ -25,6 +27,9 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"ngspice_ui/gui/widgets/help_dialog.py" = ["E501"]  # HTML strings cannot be line-broken
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

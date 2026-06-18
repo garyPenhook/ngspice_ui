@@ -4,8 +4,8 @@ import json
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QTimer, Slot
-from PySide6.QtGui import QAction, QKeySequence, QPalette, QColor, QDragEnterEvent, QDropEvent
+from PySide6.QtCore import QSettings, Qt, QTimer, Slot
+from PySide6.QtGui import QAction, QColor, QDragEnterEvent, QDropEvent, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
@@ -24,6 +24,7 @@ from .widgets.analysis_panel import AnalysisPanel
 from .widgets.console import ConsoleWidget
 from .widgets.cosim_widget import CoSimWidget
 from .widgets.eagle_view import EagleView
+from .widgets.help_dialog import HelpDialog
 from .widgets.linter import lint
 from .widgets.measurements_widget import MeasurementsWidget
 from .widgets.model_browser_widget import ModelBrowserWidget
@@ -120,6 +121,9 @@ class MainWindow(QMainWindow):
 
         self._act_plot = QAction("Plot", self)
 
+        self._act_help = QAction("User Guide…", self)
+        self._act_help.setShortcut("F1")
+
         self._act_about = QAction("About…", self)
 
         self._act_lint = QAction("Lint Netlist", self)
@@ -175,6 +179,8 @@ class MainWindow(QMainWindow):
 
         # Help
         help_menu = mb.addMenu("Help")
+        help_menu.addAction(self._act_help)
+        help_menu.addSeparator()
         help_menu.addAction(self._act_about)
 
     def _add_dock_toggle(self, dock: QDockWidget, shortcut: str | None = None) -> None:
@@ -223,7 +229,9 @@ class MainWindow(QMainWindow):
         dock = QDockWidget("Analysis", self)
         dock.setObjectName("dock_analysis")
         dock.setWidget(self._analysis_panel)
-        dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
         self.resizeDocks([dock], [240], Qt.Orientation.Horizontal)
         self._analysis_dock = dock
@@ -344,6 +352,7 @@ class MainWindow(QMainWindow):
 
         # Monte Carlo
         self._monte_carlo = MonteCarloWidget()
+        self._monte_carlo.set_netlist_getter(lambda: self._editor.toPlainText().strip())
         self._monte_carlo.run_mc.connect(self._run_monte_carlo)
         mc_dock = QDockWidget("Monte Carlo", self)
         mc_dock.setObjectName("dock_monte_carlo")
@@ -403,6 +412,7 @@ class MainWindow(QMainWindow):
         self._act_stop.triggered.connect(self._stop)
         self._act_resume.triggered.connect(self._resume)
         self._act_plot.triggered.connect(self._do_plot)
+        self._act_help.triggered.connect(self._show_help)
         self._act_about.triggered.connect(self._about)
         self._act_lint.triggered.connect(self._lint_netlist)
         self._act_find.triggered.connect(self._editor.show_find_replace)
@@ -418,6 +428,14 @@ class MainWindow(QMainWindow):
         ctrl.errors_changed.connect(self._editor.mark_errors)
 
         self._editor.modification_changed.connect(self._on_editor_modified)
+
+        # Project dirty tracking — changes to any project widget mark the project modified
+        self._project_dirty = False
+        self._analysis_panel.analysis_changed.connect(self._mark_project_dirty)
+        self._measurements.changed.connect(self._mark_project_dirty)
+        self._notes.changed.connect(self._mark_project_dirty)
+        self._script.changed.connect(self._mark_project_dirty)
+        self._cosim.changed.connect(self._mark_project_dirty)
 
         # Schematic probe → PlotLab
         self._schematic_view.net_probed.connect(self._on_net_probed)
@@ -468,6 +486,8 @@ class MainWindow(QMainWindow):
                 lines = import_schematic(p)
                 self._editor.set_content("\n".join(lines), path=None)
                 self._current_project_path = None
+                self._project_dirty = True   # imported netlist has never been saved
+                self._update_title()
                 self._set_status(f"Imported {len(lines)} element(s) from {p.name}")
             except Exception as exc:
                 QMessageBox.critical(self, "Schematic Import Error", str(exc))
@@ -481,6 +501,8 @@ class MainWindow(QMainWindow):
                 lines = import_schematic(p)
                 self._editor.set_content("\n".join(lines), path=None)
                 self._current_project_path = None
+                self._project_dirty = True   # imported netlist has never been saved
+                self._update_title()
                 self._set_status(f"Imported {len(lines)} element(s) from {p.name}")
             except Exception as exc:
                 QMessageBox.critical(self, "Schematic Import Error", str(exc))
@@ -563,6 +585,7 @@ class MainWindow(QMainWindow):
             return
         self._current_project_path = p
         self._editor.mark_saved(path=None)
+        self._project_dirty = False
         self._add_to_recent(str(p))
         self._update_title()
         self._set_status(f"Project saved: {p.name}")
@@ -580,22 +603,28 @@ class MainWindow(QMainWindow):
 
     def _load_project_from(self, p: Path) -> None:
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            raw = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             QMessageBox.critical(self, "Load Project Error", str(exc))
             return
+        if not isinstance(raw, dict):
+            QMessageBox.critical(self, "Load Project Error",
+                                 "Invalid project file: root must be a JSON object.")
+            return
+        data: dict = raw
         self._editor.set_content(data.get("netlist", ""), path=None)
-        if "analysis" in data:
+        if isinstance(data.get("analysis"), dict):
             self._analysis_panel.set_config(data["analysis"])
-        if "measurements" in data:
+        if isinstance(data.get("measurements"), list):
             self._measurements.set_config(data["measurements"])
-        if "notes" in data:
+        if isinstance(data.get("notes"), str):
             self._notes.set_config(data["notes"])
-        if "script" in data:
+        if isinstance(data.get("script"), dict):
             self._script.set_config(data["script"])
-        if "cosim" in data:
+        if isinstance(data.get("cosim"), dict):
             self._cosim.set_config(data["cosim"])
         self._current_project_path = p
+        self._project_dirty = False
         self._add_to_recent(str(p))
         self._update_title()
         self._set_status(f"Project loaded: {p.name}")
@@ -821,6 +850,11 @@ class MainWindow(QMainWindow):
     def _on_editor_modified(self, modified: bool) -> None:
         self._update_title()
 
+    @Slot()
+    def _mark_project_dirty(self) -> None:
+        self._project_dirty = True
+        self._update_title()
+
     def _update_title(self) -> None:
         if self._current_project_path:
             name = self._current_project_path.name
@@ -828,7 +862,7 @@ class MainWindow(QMainWindow):
             name = self._editor.current_path.name
         else:
             name = None
-        dirty = self._editor.is_modified
+        dirty = self._editor.is_modified or self._project_dirty
         title = "ngspice-ui"
         if name:
             title += f" — {name}"
@@ -905,8 +939,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg)
 
     # ------------------------------------------------------------------
-    # About
+    # Help / About
     # ------------------------------------------------------------------
+
+    @Slot()
+    def _show_help(self) -> None:
+        dlg = HelpDialog(self)
+        dlg.exec()
 
     @Slot()
     def _about(self) -> None:
@@ -941,10 +980,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        if self._editor.is_modified:
+        if self._editor.is_modified or self._project_dirty:
             ret = QMessageBox.question(
                 self, "Unsaved Changes",
-                "The netlist has unsaved changes. Save before closing?",
+                "The project has unsaved changes. Save before closing?",
                 QMessageBox.StandardButton.Save
                 | QMessageBox.StandardButton.Discard
                 | QMessageBox.StandardButton.Cancel,
@@ -954,18 +993,18 @@ class MainWindow(QMainWindow):
                 return
             if ret == QMessageBox.StandardButton.Save:
                 self._save_netlist()
-                if self._editor.is_modified:
+                if self._editor.is_modified or self._project_dirty:
                     event.ignore()
                     return
         self._save_geometry()
         super().closeEvent(event)
 
     def _confirm_discard(self) -> bool:
-        if not self._editor.is_modified:
+        if not self._editor.is_modified and not self._project_dirty:
             return True
         ret = QMessageBox.question(
             self, "Unsaved Changes",
-            "The netlist has unsaved changes. Discard them?",
+            "The project has unsaved changes. Discard them?",
             QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
         )
         return ret == QMessageBox.StandardButton.Discard

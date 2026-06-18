@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
@@ -16,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ngspice_ui.models.analyses import ANALYSES, ANALYSIS_KEY_ORDER, AnalysisSpec, ParamSpec
+from ngspice_ui.models.analyses import ANALYSES, ANALYSIS_KEY_ORDER, AnalysisSpec
 
 
 class AnalysisPanel(QWidget):
@@ -195,12 +194,14 @@ class AnalysisPanel(QWidget):
             tstop = _val("tstop")
             tmax = _val("tmax")
             uic = _val("uic")
+            # .tran syntax: tstep tstop [tstart [tmax]]
+            # tstart=0 is the default; must be present to position tmax correctly
             cmd = f".tran {tstep} {tstop}"
+            if tmax or uic == "Yes":
+                cmd += " 0"   # tstart placeholder
             if tmax:
                 cmd += f" {tmax}"
             if uic == "Yes":
-                if not tmax:
-                    cmd += " 0"
                 cmd += " uic"
             return cmd
 

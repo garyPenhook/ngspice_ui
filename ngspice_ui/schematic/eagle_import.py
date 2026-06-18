@@ -14,9 +14,9 @@ GND net is mapped to SPICE node '0'.
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import defusedxml.ElementTree as ET
 
 # Default SPICE node ordering by element-type letter.
 # Keys are pin names as used in Eagle library symbols.

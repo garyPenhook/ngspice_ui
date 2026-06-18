@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QPlainTextEdit, QSizePolicy, QVBoxLayout, QWidget
 
 
 class NotesWidget(QWidget):
     """Free-form project notes saved in the .ngsui project file."""
+
+    changed = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -15,6 +18,7 @@ class NotesWidget(QWidget):
         self._edit.setFont(font)
         self._edit.setPlaceholderText("Project notes…")
         self._edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._edit.textChanged.connect(self.changed)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
         lay.addWidget(self._edit)

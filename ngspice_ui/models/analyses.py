@@ -1,7 +1,7 @@
 """Single source of truth: analysis type → ngspice command and metadata."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -112,15 +112,14 @@ ANALYSES: dict[str, AnalysisSpec] = {
             ParamSpec("circuit_type", "Circuit", kind="choice",
                       choices=("vol", "cur"), default="vol"),
             ParamSpec("analysis_type", "Analysis", kind="choice",
-                      choices=("pz", "z", "p"), default="pz"),
+                      choices=("pz", "zer", "pol"), default="pz"),
         ),
     ),
     "disto": AnalysisSpec(
         label="Distortion",
-        command="disto v({output}) {variation} {points} {fstart} {fstop}",
+        command="disto {variation} {points} {fstart} {fstop}",
         scale_name="frequency",
         params=(
-            ParamSpec("output", "Output node", placeholder="out"),
             ParamSpec("variation", "Scale", kind="choice",
                       choices=("dec", "oct", "lin"), default="dec"),
             ParamSpec("points", "Points/dec", placeholder="10"),

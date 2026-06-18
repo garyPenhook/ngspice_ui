@@ -1,9 +1,8 @@
 """Parametric sweep widget — inject .param + .step into netlist and run N times."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -11,7 +10,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QRadioButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )

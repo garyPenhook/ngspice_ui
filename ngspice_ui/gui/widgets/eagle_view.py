@@ -2,16 +2,26 @@
 from __future__ import annotations
 
 import math
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal
+import defusedxml.ElementTree as ET
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
-    QBrush, QColor, QFont, QMouseEvent, QPainter, QPen, QWheelEvent,
+    QColor,
+    QFont,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 _C_BG    = QColor("#1a1a1a")
@@ -28,18 +38,27 @@ EAGLE_MM = 25.4 / 90.0  # Eagle units → mm (90 dpi grid)
 
 @dataclass
 class _EWire:
-    x1: float; y1: float; x2: float; y2: float
+    x1: float
+    y1: float
+    x2: float
+    y2: float
     net: str = ""
 
 
 @dataclass
 class _ELabel:
-    text: str; x: float; y: float
+    text: str
+    x: float
+    y: float
 
 
 @dataclass
 class _EPart:
-    ref: str; value: str; x: float; y: float; angle: float
+    ref: str
+    value: str
+    x: float
+    y: float
+    angle: float
 
 
 @dataclass
@@ -79,7 +98,8 @@ def _parse_eagle(path: Path) -> _ESchematic:
                 idx = len(sch.wires)
                 sch.wires.append(_EWire(x1, y1, x2, y2, net_name))
                 sch.net_wires.setdefault(net_name, []).append(idx)
-                xs += [x1, x2]; ys += [y1, y2]
+                xs += [x1, x2]
+                ys += [y1, y2]
             for lbl in seg.findall("label"):
                 lx = mm(lbl.get("x", "0"))
                 ly = mm(lbl.get("y", "0"))
@@ -95,7 +115,8 @@ def _parse_eagle(path: Path) -> _ESchematic:
         part_el = root.find(f".//part[@name='{ref}']")
         value = part_el.get("value", "") if part_el is not None else ""
         sch.parts.append(_EPart(ref, value, px, py, angle))
-        xs.append(px); ys.append(py)
+        xs.append(px)
+        ys.append(py)
 
     if xs:
         pad = 5.0
@@ -208,7 +229,8 @@ class _EagleCanvas(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         pos = event.position()
         mods = event.modifiers()
-        if event.button() == Qt.MouseButton.LeftButton and mods & Qt.KeyboardModifier.ControlModifier:
+        ctrl = mods & Qt.KeyboardModifier.ControlModifier
+        if event.button() == Qt.MouseButton.LeftButton and ctrl:
             net = self._net_at(pos.x(), pos.y())
             if net:
                 self.net_probed.emit(net)
@@ -304,9 +326,15 @@ class EagleView(QWidget):
         self._canvas = _EagleCanvas()
         self._canvas.net_probed.connect(self.net_probed)
 
-        btn_fit = QToolButton(); btn_fit.setText("Fit"); btn_fit.setFixedWidth(36)
-        btn_in  = QToolButton(); btn_in.setText("+");   btn_in.setFixedWidth(28)
-        btn_out = QToolButton(); btn_out.setText("−");  btn_out.setFixedWidth(28)
+        btn_fit = QToolButton()
+        btn_fit.setText("Fit")
+        btn_fit.setFixedWidth(36)
+        btn_in = QToolButton()
+        btn_in.setText("+")
+        btn_in.setFixedWidth(28)
+        btn_out = QToolButton()
+        btn_out.setText("−")
+        btn_out.setFixedWidth(28)
         self._info = QLabel()
         self._info.setStyleSheet("color: #808080; font-size: 9pt;")
 
@@ -320,7 +348,8 @@ class EagleView(QWidget):
         for w in (btn_fit, btn_in, btn_out, self._info):
             tb.addWidget(w)
         tb.addStretch()
-        tb_widget = QWidget(); tb_widget.setLayout(tb)
+        tb_widget = QWidget()
+        tb_widget.setLayout(tb)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
