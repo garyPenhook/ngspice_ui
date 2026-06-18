@@ -291,7 +291,9 @@ class NgSpiceSession:
 
     def reset(self) -> None:
         """Reset ngspice state as much as possible."""
-        self._lib.ngSpice_Reset()
+        # ngSpice_Reset added in ngspice-40; not present on older distro packages
+        if hasattr(self._lib, "ngSpice_Reset"):
+            self._lib.ngSpice_Reset()
 
     def __del__(self) -> None:
         # Best-effort; libngspice has no explicit teardown API

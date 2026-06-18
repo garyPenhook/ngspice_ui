@@ -264,8 +264,12 @@ def _wire_prototypes(lib: ctypes.CDLL) -> None:
     lib.ngSpice_SetBkpt.restype  = c_bool
     lib.ngSpice_SetBkpt.argtypes = [c_double]
 
-    lib.ngSpice_Reset.restype  = c_int
-    lib.ngSpice_Reset.argtypes = []
+    # ngSpice_Reset was added in ngspice-40; guard so we work on older distro packages
+    try:
+        lib.ngSpice_Reset.restype  = c_int
+        lib.ngSpice_Reset.argtypes = []
+    except AttributeError:
+        pass
 
     lib.ngSpice_nospinit.restype  = c_int
     lib.ngSpice_nospinit.argtypes = []
