@@ -23,8 +23,113 @@ Limitations
 from __future__ import annotations
 
 import math
+import os
+import re
 from pathlib import Path
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Net name sanitisation
+# ---------------------------------------------------------------------------
+
+# KiCad power label names that map to SPICE ground (node 0).
+_GND_NAMES: frozenset[str] = frozenset({'gnd', '0v', '0', 'vss', 'dgnd', 'agnd', 'earth'})
+
+
+def _sanitize_net(name: str) -> str:
+    """Convert a KiCad net/power label into a valid ngspice node identifier.
+
+    Rules
+    -----
+    * Known ground aliases → '0'.
+    * Leading '+' → 'vp' prefix (e.g. +5V → vp5v).
+    * Leading '-' → 'vn' prefix (e.g. -5V → vn5v).
+    * Parentheses stripped (e.g. (VGND) → vgnd).
+    * Any remaining non-alphanumeric, non-underscore char → '_'.
+    * Names that start with a digit get a 'v' prefix (SPICE requirement).
+    """
+    n = name.strip()
+    if n.lower() in _GND_NAMES:
+        return '0'
+    # Power-rail prefix conventions
+    if n.startswith('+'):
+        n = 'vp' + n[1:]
+    elif n.startswith('-'):
+        n = 'vn' + n[1:]
+    # Strip parentheses used in virtual-ground labels like (VGND)
+    n = n.replace('(', '').replace(')', '')
+    # Digit-leading names are illegal in SPICE
+    if n and n[0].isdigit():
+        n = 'v' + n
+    # Replace every remaining illegal character with underscore
+    n = re.sub(r'[^A-Za-z0-9_]', '_', n)
+    return n or 'net'
+
+
+# ---------------------------------------------------------------------------
+# Sim.Library path resolution
+# ---------------------------------------------------------------------------
+
+# KiCad 6/7 default symbol-library directories (Linux / macOS / Windows).
+# Used only when ${KICAD*_SYMBOL_DIR} env vars are not set in the environment.
+_KICAD_SYM_DIRS: list[str] = [
+    '/usr/share/kicad/symbols',
+    '/usr/local/share/kicad/symbols',
+    os.path.expanduser('~/kicad/symbols'),
+    'C:/Program Files/KiCad/7.0/share/kicad/symbols',
+    'C:/Program Files/KiCad/6.0/share/kicad/symbols',
+]
+
+# KiCad environment variable substitutions (order matters — longest first).
+_KICAD_ENV_VARS: dict[str, list[str]] = {
+    '${KICAD8_SYMBOL_DIR}': _KICAD_SYM_DIRS,
+    '${KICAD7_SYMBOL_DIR}': _KICAD_SYM_DIRS,
+    '${KICAD6_SYMBOL_DIR}': _KICAD_SYM_DIRS,
+    '${KICAD_SYMBOL_DIR}':  _KICAD_SYM_DIRS,
+    '${KIPRJMOD}':          [],  # resolved at call time from sch_dir
+}
+
+
+def _resolve_lib_path(raw: str, sch_dir: Path) -> tuple[Path | None, str]:
+    """Resolve a Sim.Library value to an absolute path.
+
+    Returns (resolved_path_or_None, directive) where directive is one of:
+      '.include "path"'   — standard SPICE library include
+      '.lib "path"'       — alias (ngspice accepts both)
+      ''                  — unresolvable (caller should emit a comment)
+    """
+    # Expand actual OS environment variables first
+    p = os.path.expandvars(raw)
+
+    # Substitute KiCad-specific variables not in the OS environment
+    for var, candidates in _KICAD_ENV_VARS.items():
+        if var in p:
+            actual = os.environ.get(var.strip('${}'))
+            if actual:
+                p = p.replace(var, actual)
+                break
+            if var == '${KIPRJMOD}':
+                p = p.replace(var, str(sch_dir))
+                break
+            for candidate in candidates:
+                trial = Path(p.replace(var, candidate))
+                if trial.exists():
+                    p = str(trial)
+                    break
+
+    resolved = Path(p) if Path(p).is_absolute() else sch_dir / p
+    resolved = resolved.resolve()
+
+    suffix = resolved.suffix.lower()
+    if suffix in ('.kicad_sym',):
+        # KiCad symbol library — models are embedded, not a SPICE .lib file.
+        # We can't extract them here; return None so the caller emits a comment.
+        return None, ''
+    directive = '.include' if suffix in ('.lib', '.mod', '.sp', '.cir', '') else '.include'
+    if resolved.exists():
+        return resolved, f'{directive} "{resolved}"'
+    # Path doesn't exist on disk — emit it anyway so the user can see it
+    return None, f'* Sim.Library not found: {resolved}'
 
 
 # ---------------------------------------------------------------------------
@@ -237,13 +342,14 @@ def _assign_label_names(root: list, uf: _UF) -> dict[tuple[int, int], str]:
         name = _atom(lbl, 1)
         at = _find(lbl, 'at')
         if name and at:
-            _set((float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))), name)
+            _set((float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))),
+                 _sanitize_net(name))
 
     for lbl in _find_all(root, 'global_label'):
         name = _atom(lbl, 1)
         at = _find(lbl, 'at')
         if name and at:
-            spice = '0' if name.upper() == 'GND' else name
+            spice = _sanitize_net(name)
             _set(
                 (float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))),
                 spice,
@@ -254,7 +360,8 @@ def _assign_label_names(root: list, uf: _UF) -> dict[tuple[int, int], str]:
         name = _atom(lbl, 1)
         at = _find(lbl, 'at')
         if name and at:
-            _set((float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))), name)
+            _set((float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))),
+                 _sanitize_net(name))
 
     return names
 
@@ -271,7 +378,7 @@ def _assign_power_names(root: list, lib_pins: dict, uf: _UF,
             continue
 
         raw = _prop(sym, 'Value') or lib_id.split(':')[-1]
-        spice = '0' if raw.upper() == 'GND' else raw
+        spice = _sanitize_net(raw)
 
         at = _find(sym, 'at')
         if at is None:
@@ -358,7 +465,10 @@ def _make_line(ref: str, value: str, sim_type: str, sim_model: str,
             if etype == 'M' and len(nets) == 3:
                 nets = nets + [nets[2]]
         else:
-            nets = _sorted_nets(pin_nets)
+            # Pin numbers don't match _PIN_ORDER — use sorted nets but cap
+            # to the expected node count so we don't emit extra nodes.
+            all_nets = _sorted_nets(pin_nets)
+            nets = all_nets[:len(order)]
     else:
         nets = _sorted_nets(pin_nets)
 
@@ -423,27 +533,50 @@ def import_kicad_sch(path: str | Path) -> list[str]:
             groups[ref] = {
                 'value': _prop(sym, 'Value'),
                 'sim_type': _prop(sym, 'Sim.Type'),
-                'sim_model': _prop(sym, 'Sim.SpiceModel'),
-                'sim_pins': _prop(sym, 'Sim.Pins'),
+                'sim_model': (
+                    _prop(sym, 'Sim.SpiceModel') or _prop(sym, 'Spice_Model')
+                ),
+                'sim_pins': (
+                    _prop(sym, 'Sim.Pins') or _prop(sym, 'Spice_Node_Sequence')
+                ),
+                'sim_lib': (
+                    _prop(sym, 'Sim.Library') or _prop(sym, 'Spice_Lib_File')
+                ),
                 'pin_nets': {},
             }
         groups[ref]['pin_nets'].update(pin_nets)
         # Unit 1 properties override the initial values (which may come from any unit)
         if _unit_of(sym) == 1:
-            for prop_key, kicad_key in (
-                ('value', 'Value'),
-                ('sim_type', 'Sim.Type'),
-                ('sim_model', 'Sim.SpiceModel'),
-                ('sim_pins', 'Sim.Pins'),
+            for prop_key, kicad_key_new, kicad_key_old in (
+                ('value',     'Value',          ''),
+                ('sim_type',  'Sim.Type',       ''),
+                ('sim_model', 'Sim.SpiceModel', 'Spice_Model'),
+                ('sim_pins',  'Sim.Pins',       'Spice_Node_Sequence'),
+                ('sim_lib',   'Sim.Library',    'Spice_Lib_File'),
             ):
-                v = _prop(sym, kicad_key)
+                v = _prop(sym, kicad_key_new) or (
+                    _prop(sym, kicad_key_old) if kicad_key_old else ''
+                )
                 if v:
                     groups[ref][prop_key] = v
 
     if not groups:
         raise ValueError("No SPICE elements found in schematic.")
 
+    # Collect unique Sim.Library includes (preserving first-seen order)
+    sch_dir = Path(path).parent
+    seen_libs: dict[str, str] = {}     # raw lib path → directive or comment
+    for g in groups.values():
+        raw_lib = g.get('sim_lib', '')
+        if raw_lib and raw_lib not in seen_libs:
+            _resolved, directive = _resolve_lib_path(raw_lib, sch_dir)
+            seen_libs[raw_lib] = directive
+
     netlist = [f"* Imported from {Path(path).name}"]
+    for directive in seen_libs.values():
+        if directive:
+            netlist.append(directive)
+
     for ref in sorted(groups):
         g = groups[ref]
         if not g['pin_nets']:
