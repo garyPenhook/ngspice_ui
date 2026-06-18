@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("Main", self)
+        tb.setObjectName("toolbar_main")
         tb.setMovable(False)
         self.addToolBar(tb)
         tb.addAction(self._act_open)
@@ -220,6 +221,7 @@ class MainWindow(QMainWindow):
     def _build_analysis_dock(self) -> None:
         self._analysis_panel = AnalysisPanel()
         dock = QDockWidget("Analysis", self)
+        dock.setObjectName("dock_analysis")
         dock.setWidget(self._analysis_panel)
         dock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
@@ -229,6 +231,7 @@ class MainWindow(QMainWindow):
     def _build_console_dock(self) -> None:
         self._console = ConsoleWidget()
         self._console_dock = QDockWidget("Console", self)
+        self._console_dock.setObjectName("dock_console")
         self._console_dock.setWidget(self._console)
         self._console_dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._console_dock)
@@ -237,6 +240,7 @@ class MainWindow(QMainWindow):
     def _build_measurements_dock(self) -> None:
         self._measurements = MeasurementsWidget()
         self._measurements_dock = QDockWidget("Measurements", self)
+        self._measurements_dock.setObjectName("dock_measurements")
         self._measurements_dock.setWidget(self._measurements)
         self._measurements_dock.setAllowedAreas(
             Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -247,6 +251,7 @@ class MainWindow(QMainWindow):
     def _build_notes_dock(self) -> None:
         self._notes = NotesWidget()
         self._notes_dock = QDockWidget("Notes", self)
+        self._notes_dock.setObjectName("dock_notes")
         self._notes_dock.setWidget(self._notes)
         self._notes_dock.setAllowedAreas(
             Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -261,6 +266,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._script, "Script")
         tabs.addTab(self._cosim, "Co-Sim")
         dock = QDockWidget("Script / Co-Sim", self)
+        dock.setObjectName("dock_script")
         dock.setWidget(tabs)
         dock.setAllowedAreas(
             Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea
@@ -273,6 +279,7 @@ class MainWindow(QMainWindow):
         # KiCad viewer
         self._schematic_view = SchematicView()
         self._schematic_dock = QDockWidget("Schematic (KiCad)", self)
+        self._schematic_dock.setObjectName("dock_schematic_kicad")
         self._schematic_dock.setWidget(self._schematic_view)
         self._schematic_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -285,6 +292,7 @@ class MainWindow(QMainWindow):
         # Eagle viewer
         self._eagle_view = EagleView()
         self._eagle_dock = QDockWidget("Schematic (Eagle)", self)
+        self._eagle_dock.setObjectName("dock_schematic_eagle")
         self._eagle_dock.setWidget(self._eagle_view)
         self._eagle_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -299,6 +307,7 @@ class MainWindow(QMainWindow):
         self._snippets = SnippetWidget()
         self._snippets.insert_requested.connect(self._insert_snippet)
         snip_dock = QDockWidget("Snippets", self)
+        snip_dock.setObjectName("dock_snippets")
         snip_dock.setWidget(self._snippets)
         snip_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -311,6 +320,7 @@ class MainWindow(QMainWindow):
         self._model_browser = ModelBrowserWidget()
         self._model_browser.insert_requested.connect(self._insert_snippet)
         mb_dock = QDockWidget("Model Library", self)
+        mb_dock.setObjectName("dock_model_library")
         mb_dock.setWidget(self._model_browser)
         mb_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -323,6 +333,7 @@ class MainWindow(QMainWindow):
         self._param_sweep = ParamSweepWidget()
         self._param_sweep.run_sweep.connect(self._run_param_sweep)
         ps_dock = QDockWidget("Param Sweep", self)
+        ps_dock.setObjectName("dock_param_sweep")
         ps_dock.setWidget(self._param_sweep)
         ps_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
@@ -335,6 +346,7 @@ class MainWindow(QMainWindow):
         self._monte_carlo = MonteCarloWidget()
         self._monte_carlo.run_mc.connect(self._run_monte_carlo)
         mc_dock = QDockWidget("Monte Carlo", self)
+        mc_dock.setObjectName("dock_monte_carlo")
         mc_dock.setWidget(self._monte_carlo)
         mc_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
