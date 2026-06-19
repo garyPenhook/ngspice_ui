@@ -375,12 +375,26 @@ class MainWindow(MainWindowUI, QMainWindow):
         self._sim_halted = False
         self._controller.resume()
 
+    def _snapshot_result(self) -> SimulationResult:
+        """Snapshot the live session and hand it to the read-only consumers.
+
+        Built fresh on demand so the manual Plot action reflects the current
+        session even when a run was triggered outside the controller (e.g. a
+        foreground command from the Script console, which emits no
+        sim_finished).
+        """
+        result = SimulationResult.from_session(self._controller.session)
+        self._plot.set_result(result)
+        self._measurements.set_result(result)
+        return result
+
     @Slot()
     def _do_plot(self) -> None:
         plot_name = self._controller.session.current_plot()
         if not plot_name or plot_name == "const":
             self._console.append_line("-- no simulation data to plot --")
             return
+        self._snapshot_result()
         self._plot.refresh()
 
     # ------------------------------------------------------------------
@@ -572,11 +586,13 @@ class MainWindow(MainWindowUI, QMainWindow):
 
         # Build an immutable snapshot of this run's vectors and hand it to the
         # read-only consumers (plotting, measurements, OP annotation).
-        result = SimulationResult.from_session(self._controller.session)
-        self._plot.set_result(result)
-        self._measurements.set_result(result)
+        result = self._snapshot_result()
 
-        self._do_plot()
+        plot_name = self._controller.session.current_plot()
+        if not plot_name or plot_name == "const":
+            self._console.append_line("-- no simulation data to plot --")
+        else:
+            self._plot.refresh()
         self._measurements.evaluate()
 
         # OP annotation — scalar (single-point) vectors are node voltages.
