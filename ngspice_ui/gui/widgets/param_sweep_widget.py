@@ -1,4 +1,5 @@
 """Parametric sweep widget — inject .param + .step into netlist and run N times."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -22,7 +23,7 @@ class ParamSweepWidget(QWidget):
     inject the .param + .step lines into the netlist and run.
     """
 
-    run_sweep = Signal(str, list)   # (param_name, [value, ...])
+    run_sweep = Signal(str, list)  # (param_name, [value, ...])
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

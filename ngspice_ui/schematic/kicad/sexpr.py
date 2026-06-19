@@ -22,7 +22,7 @@ def parse_sexp(text: str) -> list:
 
     def skip_ws() -> None:
         nonlocal pos
-        while pos < n and text[pos] in ' \t\n\r':
+        while pos < n and text[pos] in " \t\n\r":
             pos += 1
 
     def read_node():
@@ -31,12 +31,12 @@ def parse_sexp(text: str) -> list:
         if pos >= n:
             return None
         c = text[pos]
-        if c == '(':
+        if c == "(":
             pos += 1
             children = []
             while True:
                 skip_ws()
-                if pos >= n or text[pos] == ')':
+                if pos >= n or text[pos] == ")":
                     if pos < n:
                         pos += 1
                     break
@@ -48,7 +48,7 @@ def parse_sexp(text: str) -> list:
             pos += 1
             parts: list[str] = []
             while pos < n and text[pos] != '"':
-                if text[pos] == '\\':
+                if text[pos] == "\\":
                     pos += 1
                     if pos < n:
                         parts.append(text[pos])
@@ -57,10 +57,10 @@ def parse_sexp(text: str) -> list:
                 pos += 1
             if pos < n:
                 pos += 1  # closing "
-            return ''.join(parts)
+            return "".join(parts)
         else:
             start = pos
-            while pos < n and text[pos] not in ' \t\n\r()':
+            while pos < n and text[pos] not in " \t\n\r()":
                 pos += 1
             return text[start:pos]
 
@@ -81,7 +81,7 @@ def find_all(node: list, tag: str) -> list[list]:
     return [item for item in node if isinstance(item, list) and item and item[0] == tag]
 
 
-def atom(node: list, idx: int, default: str = '') -> str:
+def atom(node: list, idx: int, default: str = "") -> str:
     """String element at *idx*, or *default* if missing/non-string."""
     try:
         v = node[idx]
@@ -92,7 +92,7 @@ def atom(node: list, idx: int, default: str = '') -> str:
 
 def prop(sym: list, name: str) -> str:
     """Value of a KiCad ``(property "name" "value" ...)`` by name, else ''."""
-    for p in find_all(sym, 'property'):
+    for p in find_all(sym, "property"):
         if atom(p, 1) == name:
             return atom(p, 2)
-    return ''
+    return ""

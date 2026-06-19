@@ -15,11 +15,13 @@ def import_schematic(path: str | Path) -> list[str]:
     """
     p = Path(path)
     suffix = p.suffix.lower()
-    if suffix == '.kicad_sch':
+    if suffix == ".kicad_sch":
         from .kicad_import import import_kicad_sch
+
         return import_kicad_sch(p)
-    elif suffix == '.sch':
+    elif suffix == ".sch":
         from .eagle_import import import_eagle_sch
+
         return import_eagle_sch(p)
     else:
         raise ValueError(

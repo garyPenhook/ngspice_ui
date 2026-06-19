@@ -38,7 +38,7 @@ from .kicad.sexpr import prop as _prop
 # ---------------------------------------------------------------------------
 
 # KiCad power label names that map to SPICE ground (node 0).
-_GND_NAMES: frozenset[str] = frozenset({'gnd', '0v', '0', 'vss', 'dgnd', 'agnd', 'earth'})
+_GND_NAMES: frozenset[str] = frozenset({"gnd", "0v", "0", "vss", "dgnd", "agnd", "earth"})
 
 
 def _sanitize_net(name: str) -> str:
@@ -55,20 +55,20 @@ def _sanitize_net(name: str) -> str:
     """
     n = name.strip()
     if n.lower() in _GND_NAMES:
-        return '0'
+        return "0"
     # Power-rail prefix conventions
-    if n.startswith('+'):
-        n = 'vp' + n[1:]
-    elif n.startswith('-'):
-        n = 'vn' + n[1:]
+    if n.startswith("+"):
+        n = "vp" + n[1:]
+    elif n.startswith("-"):
+        n = "vn" + n[1:]
     # Strip parentheses used in virtual-ground labels like (VGND)
-    n = n.replace('(', '').replace(')', '')
+    n = n.replace("(", "").replace(")", "")
     # Digit-leading names are illegal in SPICE
     if n and n[0].isdigit():
-        n = 'v' + n
+        n = "v" + n
     # Replace every remaining illegal character with underscore
-    n = re.sub(r'[^A-Za-z0-9_]', '_', n)
-    return n or 'net'
+    n = re.sub(r"[^A-Za-z0-9_]", "_", n)
+    return n or "net"
 
 
 # ---------------------------------------------------------------------------
@@ -78,20 +78,20 @@ def _sanitize_net(name: str) -> str:
 # KiCad 6/7 default symbol-library directories (Linux / macOS / Windows).
 # Used only when ${KICAD*_SYMBOL_DIR} env vars are not set in the environment.
 _KICAD_SYM_DIRS: list[str] = [
-    '/usr/share/kicad/symbols',
-    '/usr/local/share/kicad/symbols',
-    os.path.expanduser('~/kicad/symbols'),
-    'C:/Program Files/KiCad/7.0/share/kicad/symbols',
-    'C:/Program Files/KiCad/6.0/share/kicad/symbols',
+    "/usr/share/kicad/symbols",
+    "/usr/local/share/kicad/symbols",
+    os.path.expanduser("~/kicad/symbols"),
+    "C:/Program Files/KiCad/7.0/share/kicad/symbols",
+    "C:/Program Files/KiCad/6.0/share/kicad/symbols",
 ]
 
 # KiCad environment variable substitutions (order matters — longest first).
 _KICAD_ENV_VARS: dict[str, list[str]] = {
-    '${KICAD8_SYMBOL_DIR}': _KICAD_SYM_DIRS,
-    '${KICAD7_SYMBOL_DIR}': _KICAD_SYM_DIRS,
-    '${KICAD6_SYMBOL_DIR}': _KICAD_SYM_DIRS,
-    '${KICAD_SYMBOL_DIR}':  _KICAD_SYM_DIRS,
-    '${KIPRJMOD}':          [],  # resolved at call time from sch_dir
+    "${KICAD8_SYMBOL_DIR}": _KICAD_SYM_DIRS,
+    "${KICAD7_SYMBOL_DIR}": _KICAD_SYM_DIRS,
+    "${KICAD6_SYMBOL_DIR}": _KICAD_SYM_DIRS,
+    "${KICAD_SYMBOL_DIR}": _KICAD_SYM_DIRS,
+    "${KIPRJMOD}": [],  # resolved at call time from sch_dir
 }
 
 
@@ -109,11 +109,11 @@ def _resolve_lib_path(raw: str, sch_dir: Path) -> tuple[Path | None, str]:
     # Substitute KiCad-specific variables not in the OS environment
     for var, candidates in _KICAD_ENV_VARS.items():
         if var in p:
-            actual = os.environ.get(var.strip('${}'))
+            actual = os.environ.get(var.strip("${}"))
             if actual:
                 p = p.replace(var, actual)
                 break
-            if var == '${KIPRJMOD}':
+            if var == "${KIPRJMOD}":
                 p = p.replace(var, str(sch_dir))
                 break
             for candidate in candidates:
@@ -126,26 +126,27 @@ def _resolve_lib_path(raw: str, sch_dir: Path) -> tuple[Path | None, str]:
     resolved = resolved.resolve()
 
     suffix = resolved.suffix.lower()
-    if suffix in ('.kicad_sym',):
+    if suffix in (".kicad_sym",):
         # KiCad symbol library — models are embedded, not a SPICE .lib file.
         # We can't extract them here; return None so the caller emits a comment.
-        return None, ''
-    directive = '.include' if suffix in ('.lib', '.mod', '.sp', '.cir', '') else '.include'
+        return None, ""
+    directive = ".include" if suffix in (".lib", ".mod", ".sp", ".cir", "") else ".include"
     if resolved.exists():
         return resolved, f'{directive} "{resolved}"'
     # Path doesn't exist on disk — emit it anyway so the user can see it
-    return None, f'* Sim.Library not found: {resolved}'
+    return None, f"* Sim.Library not found: {resolved}"
 
 
 # ---------------------------------------------------------------------------
 # S-expression navigation (parser + helpers live in .kicad.sexpr)
 # ---------------------------------------------------------------------------
 
+
 def _unit_of(sym: list) -> int:
-    n = _find(sym, 'unit')
+    n = _find(sym, "unit")
     if n:
         try:
-            return int(_atom(n, 1, '1'))
+            return int(_atom(n, 1, "1"))
         except ValueError:
             pass
     return 1
@@ -155,10 +156,10 @@ def _unit_of(sym: list) -> int:
 # Coordinate transform
 # ---------------------------------------------------------------------------
 
-def _xform(px: float, py: float,
-           sx: float, sy: float,
-           angle_deg: float,
-           mirror_x: bool, mirror_y: bool) -> tuple[float, float]:
+
+def _xform(
+    px: float, py: float, sx: float, sy: float, angle_deg: float, mirror_x: bool, mirror_y: bool
+) -> tuple[float, float]:
     """Transform a lib-relative pin position to absolute schematic coordinates."""
     # Mirrors applied before rotation (in lib coordinate space)
     if mirror_x:
@@ -174,6 +175,7 @@ def _xform(px: float, py: float,
 # ---------------------------------------------------------------------------
 # Union-Find (points keyed at 1/1000 mm resolution to absorb float noise)
 # ---------------------------------------------------------------------------
+
 
 class _UF:
     def __init__(self) -> None:
@@ -203,26 +205,27 @@ class _UF:
 # Phase 1 — lib pin positions
 # ---------------------------------------------------------------------------
 
+
 def _extract_lib_pins(root: list) -> dict[str, dict[str, tuple[float, float]]]:
     """
     Returns  lib_id → {pin_number: (rel_x, rel_y)}
     where (rel_x, rel_y) is the electrical connection tip in lib coordinates.
     """
-    ls = _find(root, 'lib_symbols')
+    ls = _find(root, "lib_symbols")
     if ls is None:
         return {}
     result: dict[str, dict[str, tuple[float, float]]] = {}
-    for sym in _find_all(ls, 'symbol'):
+    for sym in _find_all(ls, "symbol"):
         lib_name = _atom(sym, 1)
         pins: dict[str, tuple[float, float]] = {}
-        for sub in _find_all(sym, 'symbol'):
-            for pin in _find_all(sub, 'pin'):
-                num = _find(pin, 'number')
-                at = _find(pin, 'at')
+        for sub in _find_all(sym, "symbol"):
+            for pin in _find_all(sub, "pin"):
+                num = _find(pin, "number")
+                at = _find(pin, "at")
                 if num and at:
                     pins[_atom(num, 1)] = (
-                        float(_atom(at, 1, '0')),
-                        float(_atom(at, 2, '0')),
+                        float(_atom(at, 1, "0")),
+                        float(_atom(at, 2, "0")),
                     )
         result[lib_name] = pins
     return result
@@ -232,17 +235,18 @@ def _extract_lib_pins(root: list) -> dict[str, dict[str, tuple[float, float]]]:
 # Phase 2 — wire connectivity
 # ---------------------------------------------------------------------------
 
+
 def _build_uf(root: list) -> _UF:
     uf = _UF()
-    for tag in ('wire', 'bus_wire'):
+    for tag in ("wire", "bus_wire"):
         for wire in _find_all(root, tag):
-            pts = _find(wire, 'pts')
+            pts = _find(wire, "pts")
             if pts is None:
                 continue
-            xys = _find_all(pts, 'xy')
+            xys = _find_all(pts, "xy")
             if len(xys) >= 2:
-                p1 = (float(_atom(xys[0], 1, '0')), float(_atom(xys[0], 2, '0')))
-                p2 = (float(_atom(xys[1], 1, '0')), float(_atom(xys[1], 2, '0')))
+                p1 = (float(_atom(xys[0], 1, "0")), float(_atom(xys[0], 2, "0")))
+                p2 = (float(_atom(xys[1], 1, "0")), float(_atom(xys[1], 2, "0")))
                 uf.union(p1, p2)
     return uf
 
@@ -250,6 +254,7 @@ def _build_uf(root: list) -> _UF:
 # ---------------------------------------------------------------------------
 # Phase 3 — net name assignment
 # ---------------------------------------------------------------------------
+
 
 def _assign_label_names(root: list, uf: _UF) -> dict[tuple[int, int], str]:
     names: dict[tuple[int, int], str] = {}
@@ -259,57 +264,56 @@ def _assign_label_names(root: list, uf: _UF) -> dict[tuple[int, int], str]:
         if force or k not in names:
             names[k] = name
 
-    for lbl in _find_all(root, 'label'):
+    for lbl in _find_all(root, "label"):
         name = _atom(lbl, 1)
-        at = _find(lbl, 'at')
+        at = _find(lbl, "at")
         if name and at:
-            _set((float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))),
-                 _sanitize_net(name))
+            _set((float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))), _sanitize_net(name))
 
-    for lbl in _find_all(root, 'global_label'):
+    for lbl in _find_all(root, "global_label"):
         name = _atom(lbl, 1)
-        at = _find(lbl, 'at')
+        at = _find(lbl, "at")
         if name and at:
             spice = _sanitize_net(name)
             _set(
-                (float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))),
+                (float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))),
                 spice,
-                force=(spice == '0'),
+                force=(spice == "0"),
             )
 
-    for lbl in _find_all(root, 'hierarchical_label'):
+    for lbl in _find_all(root, "hierarchical_label"):
         name = _atom(lbl, 1)
-        at = _find(lbl, 'at')
+        at = _find(lbl, "at")
         if name and at:
-            _set((float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))),
-                 _sanitize_net(name))
+            _set((float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))), _sanitize_net(name))
 
     return names
 
 
-def _assign_power_names(root: list, lib_pins: dict, uf: _UF,
-                        names: dict[tuple[int, int], str]) -> None:
+def _assign_power_names(
+    root: list, lib_pins: dict, uf: _UF, names: dict[tuple[int, int], str]
+) -> None:
     """Inject net names from power symbols (lib_id starting with 'power:')."""
-    for sym in _find_all(root, 'symbol'):
-        lib_id_n = _find(sym, 'lib_id')
+    for sym in _find_all(root, "symbol"):
+        lib_id_n = _find(sym, "lib_id")
         if lib_id_n is None:
             continue
         lib_id = _atom(lib_id_n, 1)
-        if not lib_id.startswith('power:'):
+        if not lib_id.startswith("power:"):
             continue
 
-        raw = _prop(sym, 'Value') or lib_id.split(':')[-1]
+        raw = _prop(sym, "Value") or lib_id.split(":")[-1]
         spice = _sanitize_net(raw)
 
-        at = _find(sym, 'at')
+        at = _find(sym, "at")
         if at is None:
             continue
-        sx = float(_atom(at, 1, '0'))
-        sy = float(_atom(at, 2, '0'))
-        angle = float(_atom(at, 3, '0'))
-        mir = _find(sym, 'mirror')
-        mx = isinstance(mir, list) and _atom(mir, 1) == 'x'
-        my = isinstance(mir, list) and _atom(mir, 1) == 'y'
+        sx = float(_atom(at, 1, "0"))
+        sy = float(_atom(at, 2, "0"))
+        angle = float(_atom(at, 3, "0"))
+        mir = _find(sym, "mirror")
+        mx = isinstance(mir, list) and _atom(mir, 1) == "x"
+        my = isinstance(mir, list) and _atom(mir, 1) == "y"
 
         lp = lib_pins.get(lib_id, {})
         if lp:
@@ -319,7 +323,7 @@ def _assign_power_names(root: list, lib_pins: dict, uf: _UF,
             pt = (sx, sy)
 
         k = uf.find(pt)
-        if spice == '0' or k not in names:
+        if spice == "0" or k not in names:
             names[k] = spice
 
 
@@ -330,27 +334,28 @@ def _assign_power_names(root: list, lib_pins: dict, uf: _UF,
 # Default SPICE pin ordering by element-type letter.
 # Used when Sim.Pins is absent; pin keys must match the KiCad lib pin numbers.
 _PIN_ORDER: dict[str, list[str]] = {
-    'R': ['1', '2'],
-    'C': ['1', '2'],
-    'L': ['1', '2'],
-    'V': ['1', '2'],
-    'I': ['1', '2'],
-    'E': ['1', '2', '3', '4'],
-    'F': ['1', '2', '3', '4'],
-    'G': ['1', '2', '3', '4'],
-    'H': ['1', '2', '3', '4'],
-    'D': ['A', 'K'],
-    'Q': ['C', 'B', 'E'],
-    'M': ['D', 'G', 'S', 'B'],
-    'J': ['D', 'G', 'S'],
-    'K': ['L1', 'L2'],
-    'T': ['A', 'B', 'C', 'D'],
+    "R": ["1", "2"],
+    "C": ["1", "2"],
+    "L": ["1", "2"],
+    "V": ["1", "2"],
+    "I": ["1", "2"],
+    "E": ["1", "2", "3", "4"],
+    "F": ["1", "2", "3", "4"],
+    "G": ["1", "2", "3", "4"],
+    "H": ["1", "2", "3", "4"],
+    "D": ["A", "K"],
+    "Q": ["C", "B", "E"],
+    "M": ["D", "G", "S", "B"],
+    "J": ["D", "G", "S"],
+    "K": ["L1", "L2"],
+    "T": ["A", "B", "C", "D"],
 }
 
 
 def _sorted_nets(pin_nets: dict[str, str]) -> list[str]:
     def _key(k: str) -> tuple:
         return (0, int(k)) if k.isdigit() else (1, k)
+
     return [pin_nets[k] for k in sorted(pin_nets, key=_key)]
 
 
@@ -361,18 +366,19 @@ def _apply_sim_pins(sim_pins: str, pin_nets: dict[str, str]) -> list[str]:
     """
     result = []
     for token in sim_pins.split():
-        if '=' not in token:
+        if "=" not in token:
             continue
-        a, b = token.split('=', 1)
+        a, b = token.split("=", 1)
         if a.isdigit():
-            result.append(pin_nets.get(b) or pin_nets.get(a) or '?')
+            result.append(pin_nets.get(b) or pin_nets.get(a) or "?")
         else:
-            result.append(pin_nets.get(a) or pin_nets.get(b) or '?')
+            result.append(pin_nets.get(a) or pin_nets.get(b) or "?")
     return result or _sorted_nets(pin_nets)
 
 
-def _make_line(ref: str, value: str, sim_type: str, sim_model: str,
-               sim_pins: str, pin_nets: dict[str, str]) -> str:
+def _make_line(
+    ref: str, value: str, sim_type: str, sim_model: str, sim_pins: str, pin_nets: dict[str, str]
+) -> str:
     etype = (sim_type or ref[0]).upper()
 
     if sim_pins:
@@ -383,13 +389,13 @@ def _make_line(ref: str, value: str, sim_type: str, sim_model: str,
         if by_order:
             nets = by_order
             # MOSFET: bulk = source if not present in schematic
-            if etype == 'M' and len(nets) == 3:
+            if etype == "M" and len(nets) == 3:
                 nets = nets + [nets[2]]
         else:
             # Pin numbers don't match _PIN_ORDER — use sorted nets but cap
             # to the expected node count so we don't emit extra nodes.
             all_nets = _sorted_nets(pin_nets)
-            nets = all_nets[:len(order)]
+            nets = all_nets[: len(order)]
     else:
         nets = _sorted_nets(pin_nets)
 
@@ -401,11 +407,12 @@ def _make_line(ref: str, value: str, sim_type: str, sim_model: str,
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 def import_kicad_sch(path: str | Path) -> list[str]:
     """Parse a KiCad 6/7 .kicad_sch and return a SPICE netlist as list[str]."""
-    text = Path(path).read_text(encoding='utf-8')
+    text = Path(path).read_text(encoding="utf-8")
     root = _parse_sexp(text)
-    if not isinstance(root, list) or not root or root[0] != 'kicad_sch':
+    if not isinstance(root, list) or not root or root[0] != "kicad_sch":
         raise ValueError(f"Not a valid KiCad 6/7 .kicad_sch file: {path}")
 
     lib_pins = _extract_lib_pins(root)
@@ -416,34 +423,34 @@ def import_kicad_sch(path: str | Path) -> list[str]:
     def net_at(pt: tuple[float, float]) -> str:
         k = uf.find(pt)
         if k not in names:
-            names[k] = f'N{k[0]}_{k[1]}'
+            names[k] = f"N{k[0]}_{k[1]}"
         return names[k]
 
     # Group placed symbols by Reference so multi-unit ICs produce one SPICE line
     groups: dict[str, dict] = {}
-    for sym in _find_all(root, 'symbol'):
-        lib_id_n = _find(sym, 'lib_id')
+    for sym in _find_all(root, "symbol"):
+        lib_id_n = _find(sym, "lib_id")
         if lib_id_n is None:
             continue
         lib_id = _atom(lib_id_n, 1)
-        if lib_id.startswith('power:'):
+        if lib_id.startswith("power:"):
             continue
 
-        ref = _prop(sym, 'Reference')
-        if not ref or ref.startswith('#'):
+        ref = _prop(sym, "Reference")
+        if not ref or ref.startswith("#"):
             continue
-        if _prop(sym, 'Sim.Enable').lower() in ('0', 'false', 'no'):
+        if _prop(sym, "Sim.Enable").lower() in ("0", "false", "no"):
             continue
 
-        at = _find(sym, 'at')
+        at = _find(sym, "at")
         if at is None:
             continue
-        sx = float(_atom(at, 1, '0'))
-        sy = float(_atom(at, 2, '0'))
-        angle = float(_atom(at, 3, '0'))
-        mir = _find(sym, 'mirror')
-        mx = isinstance(mir, list) and _atom(mir, 1) == 'x'
-        my = isinstance(mir, list) and _atom(mir, 1) == 'y'
+        sx = float(_atom(at, 1, "0"))
+        sy = float(_atom(at, 2, "0"))
+        angle = float(_atom(at, 3, "0"))
+        mir = _find(sym, "mirror")
+        mx = isinstance(mir, list) and _atom(mir, 1) == "x"
+        my = isinstance(mir, list) and _atom(mir, 1) == "y"
 
         lp = lib_pins.get(lib_id, {})
         pin_nets: dict[str, str] = {}
@@ -452,31 +459,25 @@ def import_kicad_sch(path: str | Path) -> list[str]:
 
         if ref not in groups:
             groups[ref] = {
-                'value': _prop(sym, 'Value'),
-                'sim_type': _prop(sym, 'Sim.Type'),
-                'sim_model': (
-                    _prop(sym, 'Sim.SpiceModel') or _prop(sym, 'Spice_Model')
-                ),
-                'sim_pins': (
-                    _prop(sym, 'Sim.Pins') or _prop(sym, 'Spice_Node_Sequence')
-                ),
-                'sim_lib': (
-                    _prop(sym, 'Sim.Library') or _prop(sym, 'Spice_Lib_File')
-                ),
-                'pin_nets': {},
+                "value": _prop(sym, "Value"),
+                "sim_type": _prop(sym, "Sim.Type"),
+                "sim_model": (_prop(sym, "Sim.SpiceModel") or _prop(sym, "Spice_Model")),
+                "sim_pins": (_prop(sym, "Sim.Pins") or _prop(sym, "Spice_Node_Sequence")),
+                "sim_lib": (_prop(sym, "Sim.Library") or _prop(sym, "Spice_Lib_File")),
+                "pin_nets": {},
             }
-        groups[ref]['pin_nets'].update(pin_nets)
+        groups[ref]["pin_nets"].update(pin_nets)
         # Unit 1 properties override the initial values (which may come from any unit)
         if _unit_of(sym) == 1:
             for prop_key, kicad_key_new, kicad_key_old in (
-                ('value',     'Value',          ''),
-                ('sim_type',  'Sim.Type',       ''),
-                ('sim_model', 'Sim.SpiceModel', 'Spice_Model'),
-                ('sim_pins',  'Sim.Pins',       'Spice_Node_Sequence'),
-                ('sim_lib',   'Sim.Library',    'Spice_Lib_File'),
+                ("value", "Value", ""),
+                ("sim_type", "Sim.Type", ""),
+                ("sim_model", "Sim.SpiceModel", "Spice_Model"),
+                ("sim_pins", "Sim.Pins", "Spice_Node_Sequence"),
+                ("sim_lib", "Sim.Library", "Spice_Lib_File"),
             ):
                 v = _prop(sym, kicad_key_new) or (
-                    _prop(sym, kicad_key_old) if kicad_key_old else ''
+                    _prop(sym, kicad_key_old) if kicad_key_old else ""
                 )
                 if v:
                     groups[ref][prop_key] = v
@@ -486,9 +487,9 @@ def import_kicad_sch(path: str | Path) -> list[str]:
 
     # Collect unique Sim.Library includes (preserving first-seen order)
     sch_dir = Path(path).parent
-    seen_libs: dict[str, str] = {}     # raw lib path → directive or comment
+    seen_libs: dict[str, str] = {}  # raw lib path → directive or comment
     for g in groups.values():
-        raw_lib = g.get('sim_lib', '')
+        raw_lib = g.get("sim_lib", "")
         if raw_lib and raw_lib not in seen_libs:
             _resolved, directive = _resolve_lib_path(raw_lib, sch_dir)
             seen_libs[raw_lib] = directive
@@ -500,10 +501,16 @@ def import_kicad_sch(path: str | Path) -> list[str]:
 
     for ref in sorted(groups):
         g = groups[ref]
-        if not g['pin_nets']:
+        if not g["pin_nets"]:
             continue
-        netlist.append(_make_line(
-            ref, g['value'], g['sim_type'], g['sim_model'],
-            g['sim_pins'], g['pin_nets'],
-        ))
+        netlist.append(
+            _make_line(
+                ref,
+                g["value"],
+                g["sim_type"],
+                g["sim_model"],
+                g["sim_pins"],
+                g["pin_nets"],
+            )
+        )
     return netlist

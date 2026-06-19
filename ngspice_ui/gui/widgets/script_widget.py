@@ -76,16 +76,12 @@ class ScriptWidget(QWidget):
         self._out.setReadOnly(True)
         self._out.setFont(mono)
         self._out.setMaximumBlockCount(2000)
-        self._out.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
+        self._out.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._inp = QPlainTextEdit()
         self._inp.setFont(mono)
         self._inp.setPlaceholderText("session.current_plot()")
-        self._inp.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
+        self._inp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._inp.setMaximumHeight(120)
         self._inp.installEventFilter(self)
         self._inp.textChanged.connect(self.changed)
@@ -195,8 +191,7 @@ class ScriptWidget(QWidget):
     def _hist_step(self, direction: int) -> None:
         if not self._history:
             return
-        self._hist_idx = max(0, min(len(self._history) - 1,
-                                    self._hist_idx + direction))
+        self._hist_idx = max(0, min(len(self._history) - 1, self._hist_idx + direction))
         self._inp.setPlainText(self._history[self._hist_idx])
         cursor = self._inp.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)

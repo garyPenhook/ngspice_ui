@@ -6,6 +6,7 @@ applies the validated fields back to the widgets. All structural validation
 lives here; the UI layer only translates a raised :class:`ProjectError` into a
 dialog.
 """
+
 from __future__ import annotations
 
 import json

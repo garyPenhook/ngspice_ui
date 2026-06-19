@@ -3,6 +3,7 @@
 Pure data: VectorData is constructed directly and a fake session drives
 from_session — no libngspice required.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -106,8 +107,8 @@ class _FakeSession:
 def test_from_session_skips_const_and_unfetchable():
     r = SimulationResult.from_session(_FakeSession())
     assert r.current_plot() == "tran1"
-    assert r.all_plots() == ["tran1"]            # const skipped
+    assert r.all_plots() == ["tran1"]  # const skipped
     assert "tran1.time" in r.vectors
     assert "tran1.v(out)" in r.vectors
-    assert "tran1.gone" not in r.vectors          # fetch failed, skipped cleanly
+    assert "tran1.gone" not in r.vectors  # fetch failed, skipped cleanly
     assert not any(k.startswith("const") for k in r.vectors)

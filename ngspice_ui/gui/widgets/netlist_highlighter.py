@@ -27,17 +27,23 @@ class SpiceHighlighter(QSyntaxHighlighter):
             # Dot command keyword (first token on the line)
             (re.compile(r"^\.[a-zA-Z]+"), _fmt("#569cd6", bold=True)),
             # Device-model type keyword after .model
-            (re.compile(
-                r"\b(?:NPN|PNP|NMOS|PMOS|NJF|PJF|VDMOS|CORE|SW|CSW|LTRA|TRA|URC)\b",
-                re.IGNORECASE,
-            ), _fmt("#4ec9b0")),
+            (
+                re.compile(
+                    r"\b(?:NPN|PNP|NMOS|PMOS|NJF|PJF|VDMOS|CORE|SW|CSW|LTRA|TRA|URC)\b",
+                    re.IGNORECASE,
+                ),
+                _fmt("#4ec9b0"),
+            ),
             # Element reference — first token on a non-comment, non-dot, non-continuation line
             (re.compile(r"^[rclvidbefghjktqmuwxyz]\w*", re.IGNORECASE), _fmt("#ce9178", bold=True)),
             # Engineering numbers (MEG must be tried before bare M)
-            (re.compile(
-                r"\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:MEG|[kKmMuUnNpPfFgGtT])?\b",
-                re.IGNORECASE,
-            ), _fmt("#b5cea8")),
+            (
+                re.compile(
+                    r"\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:MEG|[kKmMuUnNpPfFgGtT])?\b",
+                    re.IGNORECASE,
+                ),
+                _fmt("#b5cea8"),
+            ),
             # Quoted strings
             (re.compile(r'"[^"]*"'), _fmt("#ce9178")),
         ]

@@ -65,7 +65,7 @@ class ConsoleWidget(QWidget):
     def append_line(self, line: str) -> None:
         self._all_lines.append(line)
         if len(self._all_lines) > self.MAX_LINES:
-            self._all_lines = self._all_lines[-self.MAX_LINES:]
+            self._all_lines = self._all_lines[-self.MAX_LINES :]
         f = self._filter.text()
         if not f or f.lower() in line.lower():
             self._text.appendPlainText(line)
@@ -77,7 +77,9 @@ class ConsoleWidget(QWidget):
 
     def _save(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Console Log", str(Path.home() / "console.txt"),
+            self,
+            "Save Console Log",
+            str(Path.home() / "console.txt"),
             "Text files (*.txt);;All Files (*)",
         )
         if path:

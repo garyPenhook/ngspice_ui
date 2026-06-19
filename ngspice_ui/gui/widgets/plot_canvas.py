@@ -30,8 +30,16 @@ from ...models.waveform import compute_fft, compute_group_delay
 
 _SCALE_NAMES = frozenset({"time", "frequency", "v-sweep", "i-sweep", "sweep"})
 _COLORS = [
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
 ]
 
 
@@ -60,15 +68,16 @@ def _fmt(v: float) -> str:
 # Single plot pane
 # ---------------------------------------------------------------------------
 
+
 class _PlotPane(QWidget):
     """One matplotlib figure with trace tree, cursors, and toolbar."""
 
     # plot mode constants
-    MODE_AUTO   = "auto"
-    MODE_BODE   = "bode"
+    MODE_AUTO = "auto"
+    MODE_BODE = "bode"
     MODE_NYQUIST = "nyquist"
-    MODE_FFT    = "fft"
-    MODE_SMITH  = "smith"
+    MODE_FFT = "fft"
+    MODE_SMITH = "smith"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -83,7 +92,7 @@ class _PlotPane(QWidget):
 
         self._plots_vecs: dict[str, list[str]] = {}
         self._checked: set[tuple[str, str]] = set()
-        self._derived: list[tuple[str, str]] = []   # (label, expr)
+        self._derived: list[tuple[str, str]] = []  # (label, expr)
 
         self._live_x: list[float] = []
         self._live_y: dict[str, list[float]] = {}
@@ -287,7 +296,8 @@ class _PlotPane(QWidget):
                 vec_item.setData(0, Qt.ItemDataRole.UserRole, ("vec", plot_name, v))
                 is_checked = (plot_name == current) or (key in self._checked)
                 vec_item.setCheckState(
-                    0, Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked,
+                    0,
+                    Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked,
                 )
                 if is_checked:
                     self._checked.add(key)
@@ -338,7 +348,8 @@ class _PlotPane(QWidget):
             raise KeyError(name)
 
         expr, ok = QInputDialog.getText(
-            self, "Add derived trace",
+            self,
+            "Add derived trace",
             "Expression (use vec('name') or numpy):\ne.g.  vec('v(out)') - vec('v(in)')",
         )
         if not ok or not expr.strip():
@@ -468,8 +479,7 @@ class _PlotPane(QWidget):
                 self._ax.plot(y.real, label=label, color=color)
         if traces and traces[0][2] is not None:
             scale = next(
-                (v for v in self._plots_vecs.get(traces[0][0], [])
-                 if v.lower() in _SCALE_NAMES),
+                (v for v in self._plots_vecs.get(traces[0][0], []) if v.lower() in _SCALE_NAMES),
                 "",
             )
             self._ax.set_xlabel(scale)
@@ -494,12 +504,12 @@ class _PlotPane(QWidget):
                 self._ax.plot(x, mag_db, label=f"|{label}| dB", color=color)
                 if show_grpdelay:
                     grp = compute_group_delay(x, y)
-                    ax2.plot(x, grp, label=f"τ {label} s", color=color,
-                             linestyle=":", alpha=0.7)
+                    ax2.plot(x, grp, label=f"τ {label} s", color=color, linestyle=":", alpha=0.7)
                     ax2.set_ylabel("Group delay (s)")
                 else:
-                    ax2.plot(x, phase_deg, label=f"∠{label} °", color=color,
-                             linestyle="--", alpha=0.6)
+                    ax2.plot(
+                        x, phase_deg, label=f"∠{label} °", color=color, linestyle="--", alpha=0.6
+                    )
                     ax2.set_ylabel("Phase (°)")
             else:
                 self._ax.plot(x, y.real, label=label, color=color)
@@ -553,8 +563,9 @@ class _PlotPane(QWidget):
         for r in (0.2, 0.5, 1.0, 2.0, 5.0):
             cx = r / (1 + r)
             cr = 1 / (1 + r)
-            self._ax.plot(cx + cr * np.cos(theta), cr * np.sin(theta),
-                          color="#888", linewidth=0.5, alpha=0.4)
+            self._ax.plot(
+                cx + cr * np.cos(theta), cr * np.sin(theta), color="#888", linewidth=0.5, alpha=0.4
+            )
         for x_val in (0.2, 0.5, 1.0, 2.0, 5.0):
             for sign in (1, -1):
                 cy = sign / x_val
@@ -562,7 +573,7 @@ class _PlotPane(QWidget):
                 arc_t = np.linspace(0, 2 * np.pi, 200)
                 xp = 1 + cr * np.cos(arc_t)
                 yp = cy + cr * np.sin(arc_t)
-                mask = (xp ** 2 + yp ** 2 <= 1.01)
+                mask = xp**2 + yp**2 <= 1.01
                 self._ax.plot(xp[mask], yp[mask], color="#888", linewidth=0.5, alpha=0.4)
 
         self._ax.axhline(0, color="#888", linewidth=0.5)
@@ -694,6 +705,7 @@ class _PlotPane(QWidget):
 # PlotLab — tabbed wrapper with Live + pinned results
 # ---------------------------------------------------------------------------
 
+
 class PlotLab(QWidget):
     """Phase-4+ plot widget: trace selector, modes, cursors, live streaming, compare tabs."""
 
@@ -760,7 +772,9 @@ class PlotLab(QWidget):
 
     def _export_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export CSV", str(Path.home() / "waveforms.csv"),
+            self,
+            "Export CSV",
+            str(Path.home() / "waveforms.csv"),
             "CSV (*.csv);;All Files (*)",
         )
         if path:
@@ -771,7 +785,9 @@ class PlotLab(QWidget):
 
     def _export_image(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Image", str(Path.home() / "plot.png"),
+            self,
+            "Export Image",
+            str(Path.home() / "plot.png"),
             "PNG (*.png);;SVG (*.svg);;PDF (*.pdf);;All Files (*)",
         )
         if path:

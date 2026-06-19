@@ -117,9 +117,7 @@ class CoSimWidget(QWidget):
         btn_del.clicked.connect(self._del_row)
 
         btn_csv = QPushButton("Load CSV…")
-        btn_csv.setToolTip(
-            "Load a CSV (time, value) file as a PWL source for the selected row"
-        )
+        btn_csv.setToolTip("Load a CSV (time, value) file as a PWL source for the selected row")
         btn_csv.clicked.connect(self._load_csv)
 
         tbl_btns = QHBoxLayout()
@@ -214,8 +212,8 @@ class CoSimWidget(QWidget):
 
             name_item = self._table.item(row, 1)
             expr_item = self._table.item(row, 3)
-            name = (name_item.text().strip().lower() if name_item else "")
-            expr = (expr_item.text().strip() if expr_item else "")
+            name = name_item.text().strip().lower() if name_item else ""
+            expr = expr_item.text().strip() if expr_item else ""
             typ = self._table.cellWidget(row, 2)
             src_type = typ.currentText() if typ else "V"
 
@@ -237,6 +235,7 @@ class CoSimWidget(QWidget):
         vsrc_fn = None
         if vsrc_fns:
             _v = dict(vsrc_fns)
+
             def vsrc_fn(t, name, _d=_v):
                 fn = _d.get(name.lower())
                 return float(fn(t, name)) if fn is not None else 0.0
@@ -244,6 +243,7 @@ class CoSimWidget(QWidget):
         isrc_fn = None
         if isrc_fns:
             _i = dict(isrc_fns)
+
             def isrc_fn(t, name, _d=_i):
                 fn = _d.get(name.lower())
                 return float(fn(t, name)) if fn is not None else 0.0
@@ -253,6 +253,7 @@ class CoSimWidget(QWidget):
         if sync_expr:
             try:
                 _raw = _compile_expr(sync_expr.replace("old_delta", "name"), "sync")
+
                 # sync receives (t, old_delta); reuse lambda(t, name) mapping name→old_delta
                 def sync_fn(t, old_delta, _raw=_raw):
                     result = _raw(t, old_delta)
@@ -262,6 +263,7 @@ class CoSimWidget(QWidget):
                 try:
                     src = f"lambda t, old_delta, math=math, np=np: ({sync_expr})"
                     _sf = eval(src, _EXPR_SCOPE)  # noqa: S307
+
                     def sync_fn(t, old_delta, _sf=_sf):
                         result = _sf(t, old_delta)
                         return float(result) if result is not None else None
@@ -299,7 +301,9 @@ class CoSimWidget(QWidget):
             QMessageBox.information(self, "Load CSV", "Select a row first.")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open CSV", str(Path.home()),
+            self,
+            "Open CSV",
+            str(Path.home()),
             "CSV files (*.csv *.txt);;All Files (*)",
         )
         if not path:
@@ -344,12 +348,14 @@ class CoSimWidget(QWidget):
             name_item = self._table.item(r, 1)
             expr_item = self._table.item(r, 3)
             cmb = self._table.cellWidget(r, 2)
-            rows.append({
-                "enabled": chk.checkState() == Qt.CheckState.Checked if chk else True,
-                "name": name_item.text() if name_item else "",
-                "type": cmb.currentText() if cmb else "V",
-                "expr": expr_item.text() if expr_item else "",
-            })
+            rows.append(
+                {
+                    "enabled": chk.checkState() == Qt.CheckState.Checked if chk else True,
+                    "name": name_item.text() if name_item else "",
+                    "type": cmb.currentText() if cmb else "V",
+                    "expr": expr_item.text() if expr_item else "",
+                }
+            )
         return {
             "rows": rows,
             "sync": self._sync_edit.text(),
@@ -364,8 +370,7 @@ class CoSimWidget(QWidget):
             chk = self._table.item(r, 0)
             if chk:
                 chk.setCheckState(
-                    Qt.CheckState.Checked if rd.get("enabled", True)
-                    else Qt.CheckState.Unchecked
+                    Qt.CheckState.Checked if rd.get("enabled", True) else Qt.CheckState.Unchecked
                 )
             name_item = self._table.item(r, 1)
             if name_item:

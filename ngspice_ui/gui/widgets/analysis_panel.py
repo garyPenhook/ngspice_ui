@@ -1,4 +1,5 @@
 """Analysis configuration panel — analysis type picker + parameter form."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -68,9 +69,7 @@ class AnalysisPanel(QWidget):
         # Preview label
         self._preview = QLabel()
         self._preview.setWordWrap(True)
-        self._preview.setStyleSheet(
-            "color: #555; font-family: monospace; font-size: 9pt;"
-        )
+        self._preview.setStyleSheet("color: #555; font-family: monospace; font-size: 9pt;")
         outer.addWidget(self._preview)
 
         outer.addStretch()
@@ -198,7 +197,7 @@ class AnalysisPanel(QWidget):
             # tstart=0 is the default; must be present to position tmax correctly
             cmd = f".tran {tstep} {tstop}"
             if tmax or uic == "Yes":
-                cmd += " 0"   # tstart placeholder
+                cmd += " 0"  # tstart placeholder
             if tmax:
                 cmd += f" {tmax}"
             if uic == "Yes":
@@ -258,15 +257,19 @@ class AnalysisPanel(QWidget):
 
     def set_config(self, cfg: dict) -> None:
         """Restore analysis setup from a dict previously returned by get_config()."""
+        if not isinstance(cfg, dict):
+            cfg = {}
         key = cfg.get("key")
-        if key is None:
+        if key is None or key not in ANALYSES:
             self._combo.setCurrentIndex(0)
         else:
             for i, k in enumerate(ANALYSIS_KEY_ORDER):
                 if k == key:
                     self._combo.setCurrentIndex(i + 1)
                     break
-            params = cfg.get("params", {})
+            params = cfg.get("params")
+            if not isinstance(params, dict):
+                params = {}
             idx = self._combo.currentIndex()
             widgets = self._param_widgets[idx]
             for p in ANALYSES[key].params:
@@ -274,6 +277,8 @@ class AnalysisPanel(QWidget):
                 if w is None:
                     continue
                 val = params.get(p.name, "")
+                if not isinstance(val, str):
+                    val = ""
                 if isinstance(w, QComboBox):
                     i2 = w.findText(val)
                     if i2 >= 0:
@@ -282,8 +287,9 @@ class AnalysisPanel(QWidget):
                     assert isinstance(w, QLineEdit)
                     w.setText(val)
 
-        self._temp_box.setChecked(cfg.get("temp_enabled", False))
-        self._temp_edit.setText(cfg.get("temp_value", ""))
+        self._temp_box.setChecked(bool(cfg.get("temp_enabled", False)))
+        temp_val = cfg.get("temp_value", "")
+        self._temp_edit.setText(temp_val if isinstance(temp_val, str) else "")
 
     def validate(self) -> list[str]:
         """Return a list of human-readable error messages for missing required fields."""

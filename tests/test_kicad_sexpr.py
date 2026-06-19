@@ -2,6 +2,7 @@
 
 Pure functions — no Qt, no libngspice.
 """
+
 from __future__ import annotations
 
 from ngspice_ui.schematic.kicad.sexpr import (
@@ -53,14 +54,12 @@ def test_atom_index_and_default():
 
 def test_atom_non_string_returns_default():
     node = ["pts", ["xy", "1", "2"]]
-    assert atom(node, 1) == ""        # element is a list, not a string
+    assert atom(node, 1) == ""  # element is a list, not a string
     assert atom(node, 1, "x") == "x"
 
 
 def test_prop_lookup_by_name():
-    sym = parse_sexp(
-        '(symbol (property "Reference" "R1") (property "Value" "1k"))'
-    )
+    sym = parse_sexp('(symbol (property "Reference" "R1") (property "Value" "1k"))')
     assert prop(sym, "Reference") == "R1"
     assert prop(sym, "Value") == "1k"
     assert prop(sym, "Absent") == ""

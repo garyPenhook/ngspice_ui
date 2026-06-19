@@ -1,4 +1,5 @@
 """Entry point for ``python -m ngspice_ui`` and PyInstaller frozen builds."""
+
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox

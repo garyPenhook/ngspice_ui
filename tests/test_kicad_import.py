@@ -4,6 +4,7 @@ Locks the netlist produced from a fixture schematic so future refactors of the
 shared parser / domain model cannot silently change importer behavior. Pure —
 no Qt, no libngspice.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

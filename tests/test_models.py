@@ -1,4 +1,5 @@
 """Tests for the pure model modules extracted in Phase 6."""
+
 from __future__ import annotations
 
 import math
@@ -13,11 +14,22 @@ from ngspice_ui.models.waveform import compute_fft, compute_group_delay
 
 def _ns(**extra):
     return {
-        "__builtins__": {}, "np": np, "math": math,
-        "abs": abs, "round": round, "min": min, "max": max,
-        "sum": sum, "len": len, "float": float, "int": int,
-        "bool": bool, "vec": lambda n: np.array([1.0]),
-        "True": True, "False": False, "None": None,
+        "__builtins__": {},
+        "np": np,
+        "math": math,
+        "abs": abs,
+        "round": round,
+        "min": min,
+        "max": max,
+        "sum": sum,
+        "len": len,
+        "float": float,
+        "int": int,
+        "bool": bool,
+        "vec": lambda n: np.array([1.0]),
+        "True": True,
+        "False": False,
+        "None": None,
         **extra,
     }
 
@@ -51,6 +63,31 @@ def test_safe_eval_blocks_subclass_escape():
         safe_eval("().__class__.__bases__[0].__subclasses__()", _ns())
 
 
+def test_safe_eval_blocks_np_file_io():
+    with pytest.raises(ValueError, match="numpy attribute not allowed"):
+        safe_eval("np.savetxt('/tmp/x', np.array([1]))", _ns())
+
+
+def test_safe_eval_blocks_np_loadtxt():
+    with pytest.raises(ValueError, match="numpy attribute not allowed"):
+        safe_eval("np.loadtxt('/tmp/x')", _ns())
+
+
+def test_safe_eval_blocks_array_method_on_computed():
+    with pytest.raises(ValueError, match="attribute access on computed values not allowed"):
+        safe_eval("np.array([1]).tofile('/tmp/x')", _ns())
+
+
+def test_safe_eval_blocks_np_fft_submodule():
+    # np.fft is blocked either as an unknown numpy attr or as chained attr access
+    with pytest.raises(ValueError):
+        safe_eval("np.fft.rfft(np.array([1.0]))", _ns())
+
+
+def test_safe_eval_allows_safe_np_attrs():
+    assert safe_eval("np.sqrt(np.mean(np.array([4.0, 4.0])))", _ns()) == pytest.approx(2.0)
+
+
 # ---------------------------------------------------------------------------
 # models.monte_carlo
 # ---------------------------------------------------------------------------
@@ -70,6 +107,24 @@ def test_parse_spice_val_mega():
 
 def test_parse_spice_val_nano():
     assert parse_spice_val("100n") == pytest.approx(100e-9)
+
+
+def test_parse_spice_val_micro_farad():
+    assert parse_spice_val("2.2uF") == pytest.approx(2.2e-6)
+
+
+def test_parse_spice_val_kilo_ohm():
+    assert parse_spice_val("10kOhm") == pytest.approx(10_000.0)
+
+
+def test_parse_spice_val_invalid():
+    with pytest.raises(ValueError):
+        parse_spice_val("not_a_number")
+
+
+def test_vary_value_raises_on_invalid():
+    with pytest.raises(ValueError):
+        vary_value("not_a_number", 5.0, "Uniform")
 
 
 def test_vary_value_uniform_in_range():
@@ -107,6 +162,14 @@ def test_generate_netlists_empty_variations():
     assert all(nl == base for nl in netlists)
 
 
+def test_generate_netlists_skips_invalid_nominal():
+    base = "* test\nR1 1 0 1k\n.end"
+    # Invalid nominal should not raise; original value is preserved
+    netlists = generate_netlists(base, [("R1", "not_a_number", 5.0, "Uniform")], n_runs=2)
+    assert len(netlists) == 2
+    assert all("1k" in nl for nl in netlists)
+
+
 # ---------------------------------------------------------------------------
 # models.waveform
 # ---------------------------------------------------------------------------
@@ -126,6 +189,15 @@ def test_compute_fft_peak_near_1khz():
     freqs, mag_db = compute_fft(t, y)
     peak_idx = np.argmax(mag_db)
     assert abs(freqs[peak_idx] - 1000) < 200  # within 200 Hz of 1 kHz
+
+
+def test_compute_fft_unit_sine_near_zero_db():
+    # Unit-amplitude sine should be ~0 dB with the single-sided correction applied.
+    t = np.linspace(0, 0.1, 8192)
+    y = np.sin(2 * np.pi * 100 * t)
+    freqs, mag_db = compute_fft(t, y)
+    peak_db = mag_db[np.argmax(mag_db)]
+    assert abs(peak_db) < 1.0  # within 1 dB of 0 dB
 
 
 def test_compute_fft_rejects_short_input():

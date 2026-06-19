@@ -60,10 +60,10 @@ class NgSpiceSession:
         suppress_spiceinit: bool = False,
     ) -> None:
         self._lib = get_lib()
-        # Bounded to prevent unbounded backlog when simulation outpaces GUI drain.
-        # DataPointEvents are dropped on full; control events (start/stop/error)
-        # are rare enough that they will not hit this limit in practice.
-        self.event_queue: queue.Queue[SimEvent] = queue.Queue(maxsize=5_000)
+        # Unbounded: control events (BGThreadEvent, InitDataEvent, …) must never
+        # be dropped.  DataPointEvent volume is controlled at the source by
+        # subsampling inside build_callbacks — see callbacks._LIVE_POINT_EVERY.
+        self.event_queue: queue.Queue[SimEvent] = queue.Queue()
 
         # Must keep callback objects alive for the entire session lifetime
         self._callbacks = build_callbacks(self.event_queue)
@@ -123,6 +123,7 @@ class NgSpiceSession:
         because calling ngSpice_Circ against a live thread risks libngspice races.
         """
         import time
+
         if not self._lib.ngSpice_running():
             return
         self._lib.ngSpice_Command(b"bg_halt")
@@ -131,8 +132,7 @@ class NgSpiceSession:
             time.sleep(0.05)
         if self._lib.ngSpice_running():
             raise RuntimeError(
-                "bg simulation did not stop within timeout; "
-                "cannot safely load a new netlist"
+                "bg simulation did not stop within timeout; cannot safely load a new netlist"
             )
 
     # ------------------------------------------------------------------
@@ -282,9 +282,7 @@ class NgSpiceSession:
         self._sync_callbacks = (vsrc_c, isrc_c, sync_c)
 
         ident = c_int(0)
-        ret = self._lib.ngSpice_Init_Sync(
-            vsrc_c, isrc_c, sync_c, ctypes.byref(ident), None
-        )
+        ret = self._lib.ngSpice_Init_Sync(vsrc_c, isrc_c, sync_c, ctypes.byref(ident), None)
         if ret != 0:
             raise RuntimeError(f"ngSpice_Init_Sync returned {ret}")
 
@@ -330,7 +328,7 @@ class VectorData:
         self.name = name
         self.v_type = v_type
         self.v_flags = v_flags
-        self.data = data          # float64 or complex128
+        self.data = data  # float64 or complex128
         self.is_complex = is_complex
 
     @classmethod
@@ -345,8 +343,9 @@ class VectorData:
         else:
             data = np.ctypeslib.as_array(vi.v_realdata, shape=(n,)).copy()
             is_complex = False
-        return cls(name=name, v_type=vi.v_type, v_flags=vi.v_flags,
-                   data=data, is_complex=is_complex)
+        return cls(
+            name=name, v_type=vi.v_type, v_flags=vi.v_flags, data=data, is_complex=is_complex
+        )
 
     def __repr__(self) -> str:
         return f"VectorData({self.name!r}, len={len(self.data)}, complex={self.is_complex})"
@@ -355,6 +354,7 @@ class VectorData:
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
 
 def _char_pp_to_list(ptr) -> list[str]:
     """Convert a NULL-terminated char** to a Python list of strings."""

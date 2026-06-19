@@ -1,4 +1,5 @@
 """Read-only graphical viewer for Eagle .sch schematics (Eagle XML format)."""
+
 from __future__ import annotations
 
 import math
@@ -24,12 +25,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_C_BG    = QColor("#1a1a1a")
-_C_WIRE  = QColor("#00cc44")
-_C_BODY  = QColor("#ccaa00")
-_C_PIN   = QColor("#ccaa00")
+_C_BG = QColor("#1a1a1a")
+_C_WIRE = QColor("#00cc44")
+_C_BODY = QColor("#ccaa00")
+_C_PIN = QColor("#ccaa00")
 _C_LABEL = QColor("#00cccc")
-_C_REF   = QColor("#e0e0e0")
+_C_REF = QColor("#e0e0e0")
 _C_VALUE = QColor("#909070")
 _C_HIGHLIGHT = QColor("#ffff00")
 
@@ -266,8 +267,9 @@ class _EagleCanvas(QWidget):
 
         if self._sch is None:
             p.setPen(QPen(_C_REF))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                       self._err or "No Eagle schematic loaded")
+            p.drawText(
+                self.rect(), Qt.AlignmentFlag.AlignCenter, self._err or "No Eagle schematic loaded"
+            )
             return
 
         sch = self._sch

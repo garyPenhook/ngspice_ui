@@ -1,4 +1,5 @@
 """Pure waveform math — FFT, group delay.  No GUI dependency."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -28,7 +29,11 @@ def compute_fft(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     dt = (t1 - t0) / (n - 1)
     freqs = np.fft.rfftfreq(n, d=dt)
     spectrum = np.fft.rfft(y_uniform)
-    mag_db = 20.0 * np.log10(np.abs(spectrum) / n + 1e-300)
+    # Single-sided amplitude: divide by n then double non-DC non-Nyquist bins
+    # so that a unit-amplitude sine reads ≈ 0 dB.
+    mag = np.abs(spectrum) / n
+    mag[1:-1] *= 2
+    mag_db = 20.0 * np.log10(mag + 1e-300)
     # Drop DC bin (index 0)
     return freqs[1:], mag_db[1:]
 

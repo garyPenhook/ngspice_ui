@@ -33,12 +33,38 @@ from PySide6.QtWidgets import (
 
 from .netlist_highlighter import SpiceHighlighter
 
-_DOT_COMPLETIONS: list[str] = sorted([
-    ".ac", ".dc", ".disto", ".else", ".elseif", ".end", ".endif", ".ends",
-    ".global", ".if", ".include", ".lib", ".measure", ".model", ".noise",
-    ".op", ".options", ".param", ".plot", ".print", ".probe", ".pz",
-    ".save", ".sens", ".subckt", ".temp", ".tf", ".tran",
-])
+_DOT_COMPLETIONS: list[str] = sorted(
+    [
+        ".ac",
+        ".dc",
+        ".disto",
+        ".else",
+        ".elseif",
+        ".end",
+        ".endif",
+        ".ends",
+        ".global",
+        ".if",
+        ".include",
+        ".lib",
+        ".measure",
+        ".model",
+        ".noise",
+        ".op",
+        ".options",
+        ".param",
+        ".plot",
+        ".print",
+        ".probe",
+        ".pz",
+        ".save",
+        ".sens",
+        ".subckt",
+        ".temp",
+        ".tf",
+        ".tran",
+    ]
+)
 
 _VALUE_RE = re.compile(
     r"^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:MEG|[kKmMuUnNpPfFgGtT])?$",
@@ -63,6 +89,7 @@ def _error_fmt() -> QTextCharFormat:
 # Line-number gutter
 # ---------------------------------------------------------------------------
 
+
 class _LineNumberArea(QWidget):
     def __init__(self, editor: "_EditorCore") -> None:
         super().__init__(editor)
@@ -79,12 +106,13 @@ class _LineNumberArea(QWidget):
 # Core QPlainTextEdit with line numbers + code folding + .include resolver
 # ---------------------------------------------------------------------------
 
+
 class _EditorCore(QPlainTextEdit):
-    include_opened = Signal(str)   # emitted when user Ctrl+clicks an .include path
+    include_opened = Signal(str)  # emitted when user Ctrl+clicks an .include path
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._fold_state: dict[int, bool] = {}   # block_number → folded
+        self._fold_state: dict[int, bool] = {}  # block_number → folded
 
         self._gutter = _LineNumberArea(self)
         self.blockCountChanged.connect(self._update_gutter_width)
@@ -137,7 +165,9 @@ class _EditorCore(QPlainTextEdit):
                 p.setPen(cur_fg if num == cur_block else fg)
                 p.setFont(self.font())
                 p.drawText(
-                    0, top, self._gutter.width() - 4,
+                    0,
+                    top,
+                    self._gutter.width() - 4,
                     self.fontMetrics().height(),
                     Qt.AlignmentFlag.AlignRight,
                     str(num + 1),
@@ -149,7 +179,9 @@ class _EditorCore(QPlainTextEdit):
                     indicator = "▶" if folded else "▼"
                     p.setPen(QColor("#888888"))
                     p.drawText(
-                        0, top, self._line_number_width() - 2,
+                        0,
+                        top,
+                        self._line_number_width() - 2,
                         self.fontMetrics().height(),
                         Qt.AlignmentFlag.AlignLeft,
                         indicator,
@@ -227,15 +259,17 @@ class _EditorCore(QPlainTextEdit):
                 end += 1
             word = line[start:end]
             if _VALUE_RE.match(word):
-                new_val, ok = QInputDialog.getText(
-                    self, "Edit value", "New value:", text=word
-                )
+                new_val, ok = QInputDialog.getText(self, "Edit value", "New value:", text=word)
                 if ok and new_val.strip():
                     cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-                    cursor.movePosition(QTextCursor.MoveOperation.Right,
-                                        QTextCursor.MoveMode.MoveAnchor, start)
-                    cursor.movePosition(QTextCursor.MoveOperation.Right,
-                                        QTextCursor.MoveMode.KeepAnchor, end - start)
+                    cursor.movePosition(
+                        QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, start
+                    )
+                    cursor.movePosition(
+                        QTextCursor.MoveOperation.Right,
+                        QTextCursor.MoveMode.KeepAnchor,
+                        end - start,
+                    )
                     cursor.insertText(new_val.strip())
                 return
         super().mouseDoubleClickEvent(event)
@@ -244,6 +278,7 @@ class _EditorCore(QPlainTextEdit):
 # ---------------------------------------------------------------------------
 # Find/Replace bar
 # ---------------------------------------------------------------------------
+
 
 class _FindBar(QWidget):
     def __init__(self, editor: "_EditorCore", parent=None) -> None:
@@ -293,11 +328,18 @@ class _FindBar(QWidget):
         row.setContentsMargins(4, 2, 4, 2)
         row.setSpacing(4)
         for w in (
-            QLabel("Find:"), self._find_edit, self._case_cb, self._regex_cb,
-            btn_prev, btn_next,
-            QLabel("Replace:"), self._replace_edit,
-            btn_replace, btn_all,
-            self._status, btn_close,
+            QLabel("Find:"),
+            self._find_edit,
+            self._case_cb,
+            self._regex_cb,
+            btn_prev,
+            btn_next,
+            QLabel("Replace:"),
+            self._replace_edit,
+            btn_replace,
+            btn_all,
+            self._status,
+            btn_close,
         ):
             row.addWidget(w)
 
@@ -308,6 +350,7 @@ class _FindBar(QWidget):
 
     def _flags(self):
         from PySide6.QtGui import QTextDocument
+
         flags = QTextDocument.FindFlag(0)
         if self._case_cb.isChecked():
             flags |= QTextDocument.FindFlag.FindCaseSensitively
@@ -333,6 +376,7 @@ class _FindBar(QWidget):
         doc = self._editor.document()
         cursor = self._editor.textCursor()
         from PySide6.QtGui import QTextDocument
+
         flags = self._flags()
         if backward:
             flags |= QTextDocument.FindFlag.FindBackward
@@ -408,6 +452,7 @@ class _FindBar(QWidget):
 # Public NetlistEditor wrapper
 # ---------------------------------------------------------------------------
 
+
 class NetlistEditor(QWidget):
     modification_changed = Signal(bool)
 
@@ -437,12 +482,7 @@ class NetlistEditor(QWidget):
         layout.addWidget(self._core)
         layout.addWidget(self._find_bar)
 
-        self._core.setPlaceholderText(
-            "* Enter netlist here\n"
-            ".title My Circuit\n"
-            "...\n"
-            ".end"
-        )
+        self._core.setPlaceholderText("* Enter netlist here\n.title My Circuit\n...\n.end")
 
     # ------------------------------------------------------------------
     # Delegate common QPlainTextEdit API
@@ -494,10 +534,12 @@ class NetlistEditor(QWidget):
 
     def eventFilter(self, obj, event) -> bool:
         from PySide6.QtCore import QEvent
+
         if obj is self._core and event.type() == QEvent.Type.KeyPress:
-            if event.matches(QKeySequence.StandardKey.Find) or \
-               (event.key() == Qt.Key.Key_H and
-                    event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            if event.matches(QKeySequence.StandardKey.Find) or (
+                event.key() == Qt.Key.Key_H
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            ):
                 self._find_bar.show_and_focus()
                 return True
         return super().eventFilter(obj, event)
@@ -537,9 +579,7 @@ class NetlistEditor(QWidget):
             return
         scroll = self._completer.popup().verticalScrollBar()
         cr = self._core.cursorRect()
-        cr.setWidth(
-            self._completer.popup().sizeHintForColumn(0) + scroll.sizeHint().width()
-        )
+        cr.setWidth(self._completer.popup().sizeHintForColumn(0) + scroll.sizeHint().width())
         self._completer.complete(cr)
 
     def _insert_completion(self, completion: str) -> None:
@@ -554,8 +594,10 @@ class NetlistEditor(QWidget):
     def keyPressEvent(self, event) -> None:
         popup = self._completer.popup()
         if popup.isVisible() and event.key() in (
-            Qt.Key.Key_Return, Qt.Key.Key_Enter,
-            Qt.Key.Key_Tab, Qt.Key.Key_Escape,
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Enter,
+            Qt.Key.Key_Tab,
+            Qt.Key.Key_Escape,
         ):
             event.ignore()
             return
@@ -605,7 +647,6 @@ class NetlistEditor(QWidget):
 # ---------------------------------------------------------------------------
 # Simple read-only viewer for .include files
 # ---------------------------------------------------------------------------
-
 
 
 class _IncludeViewer(QDialog):

@@ -2,6 +2,7 @@
 
 Pure-data tests — no libngspice, no Qt — so they always run in CI.
 """
+
 from __future__ import annotations
 
 import json
@@ -56,12 +57,12 @@ def test_empty_object_yields_all_defaults():
 
 def test_wrong_typed_fields_fall_back_to_defaults():
     raw = {
-        "netlist": 123,            # should be str
-        "analysis": ["nope"],      # should be dict
+        "netlist": 123,  # should be str
+        "analysis": ["nope"],  # should be dict
         "measurements": {"x": 1},  # should be list
-        "notes": None,             # should be str
-        "script": 5,               # should be dict
-        "cosim": "x",              # should be dict
+        "notes": None,  # should be str
+        "script": 5,  # should be dict
+        "cosim": "x",  # should be dict
     }
     doc = ProjectDocument.from_dict(raw)
     assert doc.netlist == ""

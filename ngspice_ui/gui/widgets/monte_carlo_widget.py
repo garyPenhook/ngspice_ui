@@ -1,4 +1,5 @@
 """Monte Carlo analysis widget — run N simulations with randomised component values."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -26,7 +27,7 @@ class MonteCarloWidget(QWidget):
     Emits ``run_mc`` with a list of modified netlists (one per run).
     """
 
-    run_mc = Signal(list)   # list[str] — one netlist string per run
+    run_mc = Signal(list)  # list[str] — one netlist string per run
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

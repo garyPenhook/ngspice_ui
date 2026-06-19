@@ -21,24 +21,24 @@ import defusedxml.ElementTree as ET
 # Default SPICE node ordering by element-type letter.
 # Keys are pin names as used in Eagle library symbols.
 _PIN_ORDER: dict[str, list[str]] = {
-    'R': ['1', '2'],
-    'C': ['1', '2'],
-    'L': ['1', '2'],
-    'V': ['P', 'N'],
-    'I': ['P', 'N'],
-    'D': ['A', 'K'],
-    'Q': ['C', 'B', 'E'],
-    'M': ['D', 'G', 'S', 'B'],
-    'J': ['D', 'G', 'S'],
+    "R": ["1", "2"],
+    "C": ["1", "2"],
+    "L": ["1", "2"],
+    "V": ["P", "N"],
+    "I": ["P", "N"],
+    "D": ["A", "K"],
+    "Q": ["C", "B", "E"],
+    "M": ["D", "G", "S", "B"],
+    "J": ["D", "G", "S"],
 }
 
 
 def _get_attr(elem: ET.Element, name: str) -> str:
     """Return the value of a named <attribute> child, case-insensitively."""
-    for attr in elem.findall('attribute'):
-        if attr.get('name', '').upper() == name.upper():
-            return attr.get('value', '')
-    return ''
+    for attr in elem.findall("attribute"):
+        if attr.get("name", "").upper() == name.upper():
+            return attr.get("value", "")
+    return ""
 
 
 def import_eagle_sch(path: str | Path) -> list[str]:
@@ -49,59 +49,59 @@ def import_eagle_sch(path: str | Path) -> list[str]:
         raise ValueError(f"Not a valid Eagle XML schematic: {exc}") from exc
 
     xml_root = tree.getroot()
-    drawing = xml_root.find('drawing')
+    drawing = xml_root.find("drawing")
     if drawing is None:
         raise ValueError("Not a valid Eagle schematic: missing <drawing>")
-    schematic = drawing.find('schematic')
+    schematic = drawing.find("schematic")
     if schematic is None:
         raise ValueError("Not a valid Eagle schematic: missing <schematic>")
 
     # ---- Collect all parts (schematic-level) --------------------------------
     # part_name → {value, spice_model, spice_type, spice_seq, prefix}
     parts: dict[str, dict] = {}
-    for part in schematic.findall('parts/part'):
-        name = part.get('name', '')
+    for part in schematic.findall("parts/part"):
+        name = part.get("name", "")
         if not name:
             continue
-        prefix = name[0].upper() if name else ''
-        value = part.get('value', '')
-        spice_model = _get_attr(part, 'SPICE_MODEL')
-        spice_type = _get_attr(part, 'SPICE_NETLIST_TYPE')
-        spice_seq = _get_attr(part, 'SPICE_NODE_SEQUENCE')
+        prefix = name[0].upper() if name else ""
+        value = part.get("value", "")
+        spice_model = _get_attr(part, "SPICE_MODEL")
+        spice_type = _get_attr(part, "SPICE_NETLIST_TYPE")
+        spice_seq = _get_attr(part, "SPICE_NODE_SEQUENCE")
         parts[name] = {
-            'prefix': prefix,
-            'value': value,
-            'spice_model': spice_model,
-            'spice_type': spice_type or prefix,
-            'spice_seq': spice_seq,
+            "prefix": prefix,
+            "value": value,
+            "spice_model": spice_model,
+            "spice_type": spice_type or prefix,
+            "spice_seq": spice_seq,
         }
 
     # ---- Build (part_name, pin_name) → net_name from all sheets -------------
     pin_to_net: dict[tuple[str, str], str] = {}
-    for sheet in schematic.findall('sheets/sheet'):
+    for sheet in schematic.findall("sheets/sheet"):
         # Merge instance-level attribute overrides
-        for inst in sheet.findall('instances/instance'):
-            pname = inst.get('part', '')
+        for inst in sheet.findall("instances/instance"):
+            pname = inst.get("part", "")
             if pname not in parts:
                 continue
-            sm = _get_attr(inst, 'SPICE_MODEL')
+            sm = _get_attr(inst, "SPICE_MODEL")
             if sm:
-                parts[pname]['spice_model'] = sm
-            st = _get_attr(inst, 'SPICE_NETLIST_TYPE')
+                parts[pname]["spice_model"] = sm
+            st = _get_attr(inst, "SPICE_NETLIST_TYPE")
             if st:
-                parts[pname]['spice_type'] = st
-            ss = _get_attr(inst, 'SPICE_NODE_SEQUENCE')
+                parts[pname]["spice_type"] = st
+            ss = _get_attr(inst, "SPICE_NODE_SEQUENCE")
             if ss:
-                parts[pname]['spice_seq'] = ss
+                parts[pname]["spice_seq"] = ss
 
-        for net in sheet.findall('nets/net'):
-            net_name = net.get('name', '')
-            if net_name.upper() == 'GND':
-                net_name = '0'
-            for seg in net.findall('segment'):
-                for pinref in seg.findall('pinref'):
-                    pname = pinref.get('part', '')
-                    pin = pinref.get('pin', '')
+        for net in sheet.findall("nets/net"):
+            net_name = net.get("name", "")
+            if net_name.upper() == "GND":
+                net_name = "0"
+            for seg in net.findall("segment"):
+                for pinref in seg.findall("pinref"):
+                    pname = pinref.get("part", "")
+                    pin = pinref.get("pin", "")
                     if pname and pin:
                         pin_to_net[(pname, pin)] = net_name
 
@@ -112,28 +112,26 @@ def import_eagle_sch(path: str | Path) -> list[str]:
     netlist = [f"* Imported from {Path(path).name}"]
     for pname in sorted(parts):
         info = parts[pname]
-        prefix = info['prefix']
-        etype = info['spice_type'].upper() if info['spice_type'] else prefix
-        model = info['spice_model'] if info['spice_model'] else info['value']
+        prefix = info["prefix"]
+        etype = info["spice_type"].upper() if info["spice_type"] else prefix
+        model = info["spice_model"] if info["spice_model"] else info["value"]
 
         # Collect all pins connected to this part
-        part_pins: dict[str, str] = {
-            pin: net for (p, pin), net in pin_to_net.items() if p == pname
-        }
+        part_pins: dict[str, str] = {pin: net for (p, pin), net in pin_to_net.items() if p == pname}
         if not part_pins:
             continue
 
         # Determine SPICE node order
-        seq = info['spice_seq']
+        seq = info["spice_seq"]
         if seq:
             # SPICE_NODE_SEQUENCE is a comma-separated list of pin names
-            nets = [part_pins.get(p.strip(), '?') for p in seq.split(',')]
+            nets = [part_pins.get(p.strip(), "?") for p in seq.split(",")]
         elif etype in _PIN_ORDER:
             ordered = [part_pins[p] for p in _PIN_ORDER[etype] if p in part_pins]
             if ordered:
                 nets = ordered
                 # MOSFET bulk defaults to source
-                if etype == 'M' and len(nets) == 3:
+                if etype == "M" and len(nets) == 3:
                     nets = nets + [nets[2]]
             else:
                 nets = _sorted_nets(part_pins)
@@ -141,7 +139,7 @@ def import_eagle_sch(path: str | Path) -> list[str]:
             nets = _sorted_nets(part_pins)
 
         # Subcircuit: reference must start with X
-        ref = pname if etype != 'X' else (pname if pname.startswith('X') else f'X{pname}')
+        ref = pname if etype != "X" else (pname if pname.startswith("X") else f"X{pname}")
         netlist.append(f"{ref} {' '.join(nets)} {model}")
 
     return netlist
@@ -150,4 +148,5 @@ def import_eagle_sch(path: str | Path) -> list[str]:
 def _sorted_nets(pin_nets: dict[str, str]) -> list[str]:
     def _key(k: str) -> tuple:
         return (0, int(k)) if k.isdigit() else (1, k)
+
     return [pin_nets[k] for k in sorted(pin_nets, key=_key)]

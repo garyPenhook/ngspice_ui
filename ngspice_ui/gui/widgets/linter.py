@@ -1,4 +1,5 @@
 """Lightweight SPICE netlist linter — static checks before simulation."""
+
 from __future__ import annotations
 
 import re
@@ -6,12 +7,12 @@ from pathlib import Path
 
 _INCLUDE_RE = re.compile(r'^\s*\.(?:include|lib)\s+"?([^"\s]+)"?', re.IGNORECASE)
 # Q/M/J/D devices: last whitespace-delimited token before optional inline comment is the model name
-_MODEL_REF_RE = re.compile(r'^\s*[qmjd]\w+(?:\s+\S+){2,}\s+(\w+)\s*(?:;.*)?$', re.IGNORECASE)
-_SUBCKT_DEF_RE = re.compile(r'^\s*\.subckt\s+(\w+)', re.IGNORECASE)
-_ENDS_RE = re.compile(r'^\s*\.ends\b', re.IGNORECASE)
-_MODEL_DEF_RE = re.compile(r'^\s*\.model\s+(\w+)', re.IGNORECASE)
+_MODEL_REF_RE = re.compile(r"^\s*[qmjd]\w+(?:\s+\S+){2,}\s+(\w+)\s*(?:;.*)?$", re.IGNORECASE)
+_SUBCKT_DEF_RE = re.compile(r"^\s*\.subckt\s+(\w+)", re.IGNORECASE)
+_ENDS_RE = re.compile(r"^\s*\.ends\b", re.IGNORECASE)
+_MODEL_DEF_RE = re.compile(r"^\s*\.model\s+(\w+)", re.IGNORECASE)
 # Flag values like 10kk (double suffix) or 4.7mF (suffix followed by extra letter)
-_VALUE_TYPO_RE = re.compile(r'\b(\d+(?:\.\d+)?)([KkM](?!EG|eg)[A-Za-z])')
+_VALUE_TYPO_RE = re.compile(r"\b(\d+(?:\.\d+)?)([KkM](?!EG|eg)[A-Za-z])")
 
 
 def lint(text: str, netlist_path: Path | None = None) -> list[tuple[int, str]]:
@@ -72,8 +73,13 @@ def lint(text: str, netlist_path: Path | None = None) -> list[tuple[int, str]]:
 
         # Flag value typos like 10kk or 4.7mV (double-suffix or suffix+unit letter)
         for typo_m in _VALUE_TYPO_RE.finditer(stripped):
-            issues.append((i, f"Possible value typo: {typo_m.group(0)!r} "
-                              "(double suffix or suffix followed by unit letter)"))
+            issues.append(
+                (
+                    i,
+                    f"Possible value typo: {typo_m.group(0)!r} "
+                    "(double suffix or suffix followed by unit letter)",
+                )
+            )
 
     if not has_end:
         issues.append((len(lines), "Missing .end statement"))
@@ -88,7 +94,6 @@ def lint(text: str, netlist_path: Path | None = None) -> list[tuple[int, str]]:
     if known:
         for ref_line, model_name in model_refs:
             if model_name not in known:
-                issues.append((ref_line,
-                                f"Model/subckt not defined in netlist: {model_name!r}"))
+                issues.append((ref_line, f"Model/subckt not defined in netlist: {model_name!r}"))
 
     return sorted(issues, key=lambda x: x[0])

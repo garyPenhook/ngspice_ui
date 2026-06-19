@@ -1,4 +1,5 @@
 """SPICE snippet library — sidebar with insertable template netlists."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
@@ -14,7 +15,9 @@ from PySide6.QtWidgets import (
 )
 
 _SNIPPETS: list[tuple[str, str]] = [
-    ("RC Low-pass", """\
+    (
+        "RC Low-pass",
+        """\
 * RC Low-pass filter
 Vin in 0 AC 1 SIN(0 1 1k)
 R1 in out 1k
@@ -22,16 +25,22 @@ C1 out 0 159n
 .ac dec 20 10 100k
 .tran 1us 2ms
 .end
-"""),
-    ("Voltage divider", """\
+""",
+    ),
+    (
+        "Voltage divider",
+        """\
 * Resistor voltage divider
 Vin in 0 DC 5
 R1 in mid 10k
 R2 mid 0 10k
 .op
 .end
-"""),
-    ("BJT common-emitter", """\
+""",
+    ),
+    (
+        "BJT common-emitter",
+        """\
 * NPN common-emitter amplifier
 Vcc vcc 0 DC 12
 Vin in 0 AC 1
@@ -45,8 +54,11 @@ Q1 col base 0 NPN_2N3904
 .op
 .ac dec 20 10 10MEG
 .end
-"""),
-    ("MOSFET inverter", """\
+""",
+    ),
+    (
+        "MOSFET inverter",
+        """\
 * CMOS inverter (NMOS + PMOS)
 Vdd vdd 0 DC 3.3
 Vin in 0 PULSE(0 3.3 10n 1n 1n 50n 100n)
@@ -56,8 +68,11 @@ Mp out in vdd vdd PMOS W=2u L=180n
 .model PMOS PMOS(VT0=-0.5 KP=100u)
 .tran 1n 500n
 .end
-"""),
-    ("Op-amp non-inverting", """\
+""",
+    ),
+    (
+        "Op-amp non-inverting",
+        """\
 * Ideal op-amp non-inverting amplifier (gain=11)
 Vin in 0 AC 1 SIN(0 0.1 1k)
 Vcc vcc 0 DC 15
@@ -71,8 +86,11 @@ Eout out 0 inp inn 100k
 .ac dec 20 1 1MEG
 .tran 10u 3m
 .end
-"""),
-    ("LC Band-pass", """\
+""",
+    ),
+    (
+        "LC Band-pass",
+        """\
 * LC band-pass filter (f0 ≈ 1 MHz)
 Vin in 0 AC 1
 L1 in mid 25.3u
@@ -80,8 +98,11 @@ C1 mid out 1n
 R1 out 0 50
 .ac dec 50 100k 10MEG
 .end
-"""),
-    ("Current mirror", """\
+""",
+    ),
+    (
+        "Current mirror",
+        """\
 * Simple NMOS current mirror
 Vdd vdd 0 DC 5
 Iref vdd ref 100u
@@ -92,8 +113,11 @@ Rload vdd out 10k
 .op
 .dc Vdd 0 5 0.1
 .end
-"""),
-    ("Diode half-wave rectifier", """\
+""",
+    ),
+    (
+        "Diode half-wave rectifier",
+        """\
 * Half-wave rectifier
 Vin in 0 SIN(0 5 60)
 D1 in out 1N4148
@@ -102,8 +126,11 @@ Cfilter out 0 100u
 .model 1N4148 D(IS=2.52e-9 N=1.752 RS=0.568 CJO=4e-12)
 .tran 100u 50m
 .end
-"""),
-    (".param sweep template", """\
+""",
+    ),
+    (
+        ".param sweep template",
+        """\
 * Parametric sweep example
 .param Rval=1k
 Vin in 0 DC 1
@@ -112,8 +139,11 @@ Rload out 0 1k
 .step param Rval list 100 1k 10k 100k
 .op
 .end
-"""),
-    ("Monte Carlo template", """\
+""",
+    ),
+    (
+        "Monte Carlo template",
+        """\
 * Monte Carlo — add gaussian variation to components
 .param Rtol=0.05
 .param R1val = {gauss(10k, Rtol, 3)}
@@ -122,14 +152,15 @@ R1 in out {R1val}
 R2 out 0 10k
 .op
 .end
-"""),
+""",
+    ),
 ]
 
 
 class SnippetWidget(QWidget):
     """Snippet sidebar: select a template, preview it, insert into editor."""
 
-    insert_requested = Signal(str)   # text to insert at editor cursor
+    insert_requested = Signal(str)  # text to insert at editor cursor
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

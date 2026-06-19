@@ -3,27 +3,176 @@
 Only numeric, numpy, and whitelisted built-in operations are permitted.
 Dunder attribute access and any name outside the whitelist raise ValueError.
 """
+
 from __future__ import annotations
 
 import ast
 
-_WHITELISTED_NAMES: frozenset[str] = frozenset({
-    "np", "math", "abs", "round", "min", "max", "sum", "len",
-    "float", "int", "bool", "vec",
-    "True", "False", "None",
-})
+_WHITELISTED_NAMES: frozenset[str] = frozenset(
+    {
+        "np",
+        "math",
+        "abs",
+        "round",
+        "min",
+        "max",
+        "sum",
+        "len",
+        "float",
+        "int",
+        "bool",
+        "vec",
+        "True",
+        "False",
+        "None",
+    }
+)
+
+# Explicit allowlist for numpy attributes.  This blocks file I/O (savetxt, save,
+# loadtxt, …), submodule namespaces (fft, random, …), and arbitrary function
+# application (vectorize, frompyfunc, apply_along_axis, …).  Use np.real(x)
+# rather than x.real for array methods — direct Name access only.
+_SAFE_NP_ATTRS: frozenset[str] = frozenset(
+    {
+        "array",
+        "asarray",
+        "zeros",
+        "ones",
+        "empty",
+        "zeros_like",
+        "ones_like",
+        "full",
+        "linspace",
+        "arange",
+        "abs",
+        "absolute",
+        "fabs",
+        "sqrt",
+        "square",
+        "cbrt",
+        "exp",
+        "expm1",
+        "exp2",
+        "log",
+        "log2",
+        "log10",
+        "log1p",
+        "sin",
+        "cos",
+        "tan",
+        "arcsin",
+        "arccos",
+        "arctan",
+        "arctan2",
+        "sinh",
+        "cosh",
+        "tanh",
+        "arcsinh",
+        "arccosh",
+        "arctanh",
+        "floor",
+        "ceil",
+        "round",
+        "trunc",
+        "rint",
+        "clip",
+        "sign",
+        "max",
+        "min",
+        "mean",
+        "median",
+        "std",
+        "var",
+        "sum",
+        "prod",
+        "nanmax",
+        "nanmin",
+        "nanmean",
+        "nanmedian",
+        "nanstd",
+        "nanvar",
+        "nansum",
+        "ptp",
+        "percentile",
+        "quantile",
+        "concatenate",
+        "stack",
+        "hstack",
+        "vstack",
+        "append",
+        "diff",
+        "gradient",
+        "cumsum",
+        "cumprod",
+        "sort",
+        "argsort",
+        "argmax",
+        "argmin",
+        "nonzero",
+        "where",
+        "unique",
+        "interp",
+        "dot",
+        "cross",
+        "inner",
+        "outer",
+        "real",
+        "imag",
+        "angle",
+        "conj",
+        "unwrap",
+        "pi",
+        "e",
+        "inf",
+        "nan",
+        "newaxis",
+        "float64",
+        "float32",
+        "complex128",
+        "complex64",
+        "int64",
+        "int32",
+        "bool_",
+        "ndarray",
+    }
+)
 
 _SAFE_NODES = (
-    ast.Expression, ast.Constant,
-    ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
-    ast.IfExp, ast.List, ast.Tuple,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+    ast.Expression,
+    ast.Constant,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.BoolOp,
+    ast.Compare,
+    ast.IfExp,
+    ast.List,
+    ast.Tuple,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
     ast.MatMult,
-    ast.USub, ast.UAdd, ast.Invert, ast.Not,
-    ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq,
-    ast.And, ast.Or,
-    ast.Subscript, ast.Index, ast.Slice,
-    ast.Load, ast.Store, ast.Del,
+    ast.USub,
+    ast.UAdd,
+    ast.Invert,
+    ast.Not,
+    ast.Lt,
+    ast.LtE,
+    ast.Gt,
+    ast.GtE,
+    ast.Eq,
+    ast.NotEq,
+    ast.And,
+    ast.Or,
+    ast.Subscript,
+    ast.Index,
+    ast.Slice,
+    ast.Load,
+    ast.Store,
+    ast.Del,
     ast.keyword,
 )
 
@@ -35,6 +184,12 @@ def _validate(node: ast.AST) -> None:
     elif isinstance(node, ast.Attribute):
         if node.attr.startswith("_"):
             raise ValueError(f"private attribute access not allowed: {node.attr!r}")
+        # Only allow attribute access directly on a whitelisted name, never on a
+        # computed value (blocks array.tofile(...) and np.fft.rfft(...) alike).
+        if not isinstance(node.value, ast.Name):
+            raise ValueError(f"attribute access on computed values not allowed: {node.attr!r}")
+        if node.value.id == "np" and node.attr not in _SAFE_NP_ATTRS:
+            raise ValueError(f"numpy attribute not allowed: {node.attr!r}")
         _validate(node.value)
     elif isinstance(node, ast.Call):
         _validate(node.func)

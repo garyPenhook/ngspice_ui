@@ -3,6 +3,7 @@
 Drains the engine's event_queue via a QTimer on the GUI thread and
 re-emits events as Qt signals — no widget access from callback threads.
 """
+
 from __future__ import annotations
 
 import queue
@@ -33,11 +34,11 @@ class SimController(QObject):
     sim_started = Signal()
     sim_finished = Signal()
     progress = Signal(int)
-    plot_init = Signal(object)    # InitDataEvent — emitted when a new sim begins
-    plot_data = Signal(object)    # list[DataPointEvent] — batched per drain cycle
-    errors_changed = Signal(list) # list[tuple[int, str]] — (1-based lineno, msg)
+    plot_init = Signal(object)  # InitDataEvent — emitted when a new sim begins
+    plot_data = Signal(object)  # list[DataPointEvent] — batched per drain cycle
+    errors_changed = Signal(list)  # list[tuple[int, str]] — (1-based lineno, msg)
     mc_progress = Signal(int, int)  # (1-based run index, total runs)
-    mc_finished = Signal(int)       # total runs completed
+    mc_finished = Signal(int)  # total runs completed
 
     def __init__(
         self,
@@ -55,6 +56,7 @@ class SimController(QObject):
         self._mc_index = 0
         self._mc_analysis_line: str | None = None
         self._mc_connected = False
+        self._mc_active = False  # False while halted/cancelled so sim_finished won't advance
 
         self._drain_timer = QTimer(self)
         self._drain_timer.setInterval(50)
@@ -129,6 +131,8 @@ class SimController(QObject):
 
     @Slot()
     def halt(self) -> None:
+        if self._mc_active:
+            self._mc_active = False  # cancel pending MC runs before the finished signal fires
         try:
             self._session.bg_halt()
         except RuntimeError as exc:
@@ -174,6 +178,7 @@ class SimController(QObject):
         self._mc_total = len(netlists)
         self._mc_index = 0
         self._mc_analysis_line = analysis_line
+        self._mc_active = True
         if not self._mc_connected:
             self.sim_finished.connect(self._mc_on_finished)
             self._mc_connected = True
@@ -189,17 +194,23 @@ class SimController(QObject):
 
     @Slot()
     def _mc_on_finished(self) -> None:
-        # Only react while a Monte Carlo sequence is active.
         if not self._mc_connected:
+            return
+        if not self._mc_active:
+            # Halted mid-sequence — clean up without starting the next run.
+            self.sim_finished.disconnect(self._mc_on_finished)
+            self._mc_connected = False
+            self._mc_queue.clear()
             return
         if self._mc_queue:
             self._mc_run_next()
         else:
             self.sim_finished.disconnect(self._mc_on_finished)
             self._mc_connected = False
+            self._mc_active = False
             self.mc_finished.emit(self._mc_total)
 
-    _MAX_DATA_EVENTS_PER_DRAIN = 2_500
+    _MAX_DATA_EVENTS_PER_DRAIN = 250
 
     @Slot()
     def _drain_queue(self) -> None:
@@ -235,6 +246,6 @@ class SimController(QObject):
                     data_events.append(e)
                     data_cap -= 1
                     if data_cap <= 0:
-                        break   # yield to the GUI; next tick drains the rest
+                        break  # yield to the GUI; next tick drains the rest
         if data_events:
             self.plot_data.emit(data_events)

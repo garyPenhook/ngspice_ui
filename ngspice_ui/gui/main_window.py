@@ -137,7 +137,13 @@ class MainWindow(MainWindowUI, QMainWindow):
     def _new_file(self) -> None:
         if not self._confirm_discard():
             return
+        empty = ProjectDocument()
         self._editor.set_content("", path=None)
+        self._analysis_panel.set_config(empty.analysis)
+        self._measurements.set_config(empty.measurements)
+        self._notes.set_config(empty.notes)
+        self._script.set_config(empty.script)
+        self._cosim.set_config(empty.cosim)
         self._current_project_path = None
         self._project_dirty = False
         self._update_title()
@@ -147,7 +153,9 @@ class MainWindow(MainWindowUI, QMainWindow):
         if not self._confirm_discard():
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open File", str(Path.home()),
+            self,
+            "Open File",
+            str(Path.home()),
             "All Supported (*.cir *.net *.sp *.spi *.kicad_sch *.sch *.ngsui);;"
             "SPICE Netlists (*.cir *.net *.sp *.spi);;"
             "KiCad Schematic (*.kicad_sch);;"
@@ -167,10 +175,11 @@ class MainWindow(MainWindowUI, QMainWindow):
         if suffix == ".kicad_sch":
             try:
                 from ..schematic import import_schematic
+
                 lines = import_schematic(p)
                 self._editor.set_content("\n".join(lines), path=None)
                 self._current_project_path = None
-                self._project_dirty = True   # imported netlist has never been saved
+                self._project_dirty = True  # imported netlist has never been saved
                 self._update_title()
                 self._set_status(f"Imported {len(lines)} element(s) from {p.name}")
             except Exception as exc:
@@ -182,10 +191,11 @@ class MainWindow(MainWindowUI, QMainWindow):
         elif suffix == ".sch":
             try:
                 from ..schematic import import_schematic
+
                 lines = import_schematic(p)
                 self._editor.set_content("\n".join(lines), path=None)
                 self._current_project_path = None
-                self._project_dirty = True   # imported netlist has never been saved
+                self._project_dirty = True  # imported netlist has never been saved
                 self._update_title()
                 self._set_status(f"Imported {len(lines)} element(s) from {p.name}")
             except Exception as exc:
@@ -221,7 +231,9 @@ class MainWindow(MainWindowUI, QMainWindow):
     def _save_netlist_as(self) -> None:
         default = str(self._editor.current_path or Path.home() / "circuit.cir")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Netlist As", default,
+            self,
+            "Save Netlist As",
+            default,
             "SPICE Netlists (*.cir *.net *.sp *.spi);;All Files (*)",
         )
         if path:
@@ -246,7 +258,9 @@ class MainWindow(MainWindowUI, QMainWindow):
     def _save_project(self) -> None:
         default = str(self._current_project_path or Path.home() / "project.ngsui")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", default,
+            self,
+            "Save Project",
+            default,
             "ngspice-ui Project (*.ngsui);;All Files (*)",
         )
         if path:
@@ -278,7 +292,9 @@ class MainWindow(MainWindowUI, QMainWindow):
         if not self._confirm_discard():
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Project", str(Path.home()),
+            self,
+            "Load Project",
+            str(Path.home()),
             "ngspice-ui Project (*.ngsui);;All Files (*)",
         )
         if path:
@@ -636,7 +652,8 @@ class MainWindow(MainWindowUI, QMainWindow):
     @Slot()
     def _about(self) -> None:
         QMessageBox.about(
-            self, "About ngspice-ui",
+            self,
+            "About ngspice-ui",
             "<b>ngspice-ui</b><br>"
             "PySide6 front-end for ngspice (libngspice · ctypes).<br><br>"
             "Phases complete: 0–8 + full feature set.<br><br>"
@@ -668,7 +685,8 @@ class MainWindow(MainWindowUI, QMainWindow):
     def closeEvent(self, event) -> None:
         if self._editor.is_modified or self._project_dirty:
             ret = QMessageBox.question(
-                self, "Unsaved Changes",
+                self,
+                "Unsaved Changes",
                 "The project has unsaved changes. Save before closing?",
                 QMessageBox.StandardButton.Save
                 | QMessageBox.StandardButton.Discard
@@ -683,11 +701,11 @@ class MainWindow(MainWindowUI, QMainWindow):
                     self._write_project(self._current_project_path)
                 else:
                     if self._editor.is_modified:
-                        self._save_netlist()   # may open Save As dialog
+                        self._save_netlist()  # may open Save As dialog
                     if self._project_dirty:
-                        self._save_project()   # opens Save Project dialog
+                        self._save_project()  # opens Save Project dialog
                 if self._editor.is_modified or self._project_dirty:
-                    event.ignore()             # user cancelled a dialog
+                    event.ignore()  # user cancelled a dialog
                     return
         self._save_geometry()
         super().closeEvent(event)
@@ -696,7 +714,8 @@ class MainWindow(MainWindowUI, QMainWindow):
         if not self._editor.is_modified and not self._project_dirty:
             return True
         ret = QMessageBox.question(
-            self, "Unsaved Changes",
+            self,
+            "Unsaved Changes",
             "The project has unsaved changes. Discard them?",
             QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
         )

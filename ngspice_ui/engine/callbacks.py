@@ -29,22 +29,26 @@ from .bindings import (
 # Event dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass(slots=True)
 class CharEvent:
     """One line of stdout/stderr from ngspice."""
+
     line: str
 
 
 @dataclass(slots=True)
 class StatEvent:
     """Simulation status message with completion percentage."""
+
     message: str
-    percent: int          # 0–100 (parsed from the string)
+    percent: int  # 0–100 (parsed from the string)
 
 
 @dataclass(slots=True)
 class ExitEvent:
     """ngspice is requesting process exit."""
+
     status: int
     immediate: bool
     on_quit: bool
@@ -53,6 +57,7 @@ class ExitEvent:
 @dataclass(slots=True)
 class DataPointEvent:
     """Values of all output vectors at one accepted simulation time step."""
+
     vec_index: int
     values: dict[str, complex]  # name → real (+ 0j) or complex
     scale_name: str
@@ -61,16 +66,18 @@ class DataPointEvent:
 @dataclass(slots=True)
 class InitDataEvent:
     """Vector metadata emitted once when a simulation starts."""
+
     plot_name: str
     plot_title: str
     plot_type: str
     vector_names: list[str]
-    real_flags: list[bool]      # parallel to vector_names
+    real_flags: list[bool]  # parallel to vector_names
 
 
 @dataclass(slots=True)
 class BGThreadEvent:
     """Background simulation thread started or stopped."""
+
     running: bool
 
 
@@ -81,6 +88,13 @@ SimEvent = CharEvent | StatEvent | ExitEvent | DataPointEvent | InitDataEvent | 
 # Callback builder
 # ---------------------------------------------------------------------------
 
+# Queue 1-in-N live data points so the event queue stays small without bounding
+# it.  Control events (BGThreadEvent, InitDataEvent, …) are infrequent and must
+# never be dropped, so the queue must remain unbounded.  Adjust this constant to
+# trade live-plot resolution against queue depth — 10 keeps ~1/10 of data points.
+_LIVE_POINT_EVERY = 10
+
+
 def build_callbacks(
     event_queue: "queue.Queue[SimEvent]",
 ) -> dict[str, Any]:
@@ -90,6 +104,9 @@ def build_callbacks(
     ngSpice_Init's callbacks are registered — ctypes does not keep a reference.
     Store the returned dict on the owning session object.
     """
+    # Counter is reset to 0 each time _send_init_data fires (once per sim start)
+    # so the first data point of every simulation is always queued.
+    _data_n = [0]
 
     def _send_char(msg: bytes, _ident: int, _user: Any) -> int:
         line = msg.decode("utf-8", errors="replace").rstrip()
@@ -118,6 +135,9 @@ def build_callbacks(
         return 0
 
     def _send_data(raw_ptr: int, _count: int, _ident: int, _user: Any) -> int:
+        _data_n[0] += 1
+        if _data_n[0] % _LIVE_POINT_EVERY != 0:
+            return 0  # subsample: skip most points for live preview
         if not raw_ptr:
             return 0
         p_all = ctypes.cast(raw_ptr, ctypes.POINTER(VecValuesAll))
@@ -131,15 +151,13 @@ def build_callbacks(
             values[name] = val
             if v.is_scale:
                 scale_name = name
-        try:
-            event_queue.put_nowait(
-                DataPointEvent(vec_index=all_.vecindex, values=values, scale_name=scale_name)
-            )
-        except queue.Full:
-            pass  # drop live-preview point; final result is read via session.get_vector()
+        event_queue.put_nowait(
+            DataPointEvent(vec_index=all_.vecindex, values=values, scale_name=scale_name)
+        )
         return 0
 
     def _send_init_data(raw_ptr: int, _ident: int, _user: Any) -> int:
+        _data_n[0] = 0  # reset subsample counter at the start of each simulation
         if not raw_ptr:
             return 0
         p_all = ctypes.cast(raw_ptr, ctypes.POINTER(VecInfoAll))
@@ -170,10 +188,10 @@ def build_callbacks(
         return 0
 
     return {
-        "send_char":        CB_SendChar(_send_char),
-        "send_stat":        CB_SendStat(_send_stat),
-        "controlled_exit":  CB_ControlledExit(_controlled_exit),
-        "send_data":        CB_SendData(_send_data),
-        "send_init_data":   CB_SendInitData(_send_init_data),
+        "send_char": CB_SendChar(_send_char),
+        "send_stat": CB_SendStat(_send_stat),
+        "controlled_exit": CB_ControlledExit(_controlled_exit),
+        "send_data": CB_SendData(_send_data),
+        "send_init_data": CB_SendInitData(_send_init_data),
         "bg_thread_running": CB_BGThreadRunning(_bg_thread_running),
     }

@@ -1,4 +1,5 @@
 """SPICE model library browser — scan .lib/.mod files and display .model/.subckt defs."""
+
 from __future__ import annotations
 
 import re
@@ -20,9 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_DEF_RE = re.compile(
-    r'^\s*\.(model|subckt)\s+(\w+)(?:\s+(\w+))?', re.IGNORECASE | re.MULTILINE
-)
+_DEF_RE = re.compile(r"^\s*\.(model|subckt)\s+(\w+)(?:\s+(\w+))?", re.IGNORECASE | re.MULTILINE)
 
 
 def _scan_file(path: Path) -> list[tuple[str, str, str]]:
@@ -43,7 +42,7 @@ def _scan_file(path: Path) -> list[tuple[str, str, str]]:
 class ModelBrowserWidget(QWidget):
     """Browse .lib directories, view model parameters, insert .include into netlist."""
 
-    insert_requested = Signal(str)   # .include line to insert
+    insert_requested = Signal(str)  # .include line to insert
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -147,8 +146,8 @@ class ModelBrowserWidget(QWidget):
             text = path.read_text(encoding="utf-8", errors="replace")
             # Extract the model block
             pat = re.compile(
-                rf'(^\s*\.(?:model|subckt)\s+{re.escape(name)}\b.*?)(?=^\s*\.\w|\Z)',
-                re.IGNORECASE | re.MULTILINE | re.DOTALL
+                rf"(^\s*\.(?:model|subckt)\s+{re.escape(name)}\b.*?)(?=^\s*\.\w|\Z)",
+                re.IGNORECASE | re.MULTILINE | re.DOTALL,
             )
             m = pat.search(text)
             snippet = m.group(1).strip() if m else text[:2000]

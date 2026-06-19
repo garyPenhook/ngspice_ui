@@ -1,4 +1,5 @@
 """Read-only graphical viewer for KiCad 6/7 .kicad_sch files."""
+
 from __future__ import annotations
 
 import math
@@ -34,22 +35,23 @@ from ...schematic.kicad.sexpr import prop as _prop
 # ---------------------------------------------------------------------------
 # Colors  (KiCad-inspired dark scheme)
 # ---------------------------------------------------------------------------
-_C_BG       = QColor("#1a1a2e")
-_C_WIRE     = QColor("#00c800")
-_C_BUS      = QColor("#0000d0")
-_C_JCT      = QColor("#00c800")
-_C_NCONN    = QColor("#c80000")
-_C_BODY     = QColor("#d4a017")
-_C_PIN      = QColor("#d4a017")
-_C_LABEL    = QColor("#00c8c8")
-_C_GLABEL   = QColor("#c800c8")
-_C_POWER    = QColor("#00c800")
-_C_REF      = QColor("#e8e8e8")
-_C_VALUE    = QColor("#a0a080")
+_C_BG = QColor("#1a1a2e")
+_C_WIRE = QColor("#00c800")
+_C_BUS = QColor("#0000d0")
+_C_JCT = QColor("#00c800")
+_C_NCONN = QColor("#c80000")
+_C_BODY = QColor("#d4a017")
+_C_PIN = QColor("#d4a017")
+_C_LABEL = QColor("#00c8c8")
+_C_GLABEL = QColor("#c800c8")
+_C_POWER = QColor("#00c800")
+_C_REF = QColor("#e8e8e8")
+_C_VALUE = QColor("#a0a080")
 
 # ---------------------------------------------------------------------------
 # Internal data classes
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _Wire:
@@ -91,8 +93,8 @@ class _LibGraphic:
     radius: float = 0
     pin_angle: float = 0
     pin_length: float = 0
-    pin_name: str = ''
-    pin_number: str = ''
+    pin_name: str = ""
+    pin_number: str = ""
 
 
 @dataclass
@@ -120,13 +122,14 @@ class _PlacedSym:
     val_angle: float = 0
     hide_val: bool = False
 
+
 @dataclass
 class _Schematic:
-    wires:    list[_Wire]      = field(default_factory=list)
-    junctions:list[_Junction]  = field(default_factory=list)
-    noconns:  list[_NoConnect] = field(default_factory=list)
-    labels:   list[_Label]     = field(default_factory=list)
-    syms:     list[_PlacedSym] = field(default_factory=list)
+    wires: list[_Wire] = field(default_factory=list)
+    junctions: list[_Junction] = field(default_factory=list)
+    noconns: list[_NoConnect] = field(default_factory=list)
+    labels: list[_Label] = field(default_factory=list)
+    syms: list[_PlacedSym] = field(default_factory=list)
     sym_defs: dict[str, _SymDef] = field(default_factory=dict)
     bbox: tuple = (0.0, 0.0, 100.0, 100.0)
     # wire-index → net-id (built lazily via Union-Find)
@@ -185,24 +188,34 @@ def _build_net_connectivity(sch: _Schematic) -> None:
 # Arc through 3 points as polyline samples
 # ---------------------------------------------------------------------------
 
-def _arc_path(sx: float, sy: float, mx: float, my: float,
-              ex: float, ey: float, steps: int = 32) -> QPainterPath:
-    d = 2*(sx*(my-ey) + mx*(ey-sy) + ex*(sy-my))
+
+def _arc_path(
+    sx: float, sy: float, mx: float, my: float, ex: float, ey: float, steps: int = 32
+) -> QPainterPath:
+    d = 2 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my))
     if abs(d) < 1e-10:
         path = QPainterPath()
         path.moveTo(sx, sy)
         path.lineTo(ex, ey)
         return path
-    ux = ((sx*sx+sy*sy)*(my-ey) + (mx*mx+my*my)*(ey-sy) + (ex*ex+ey*ey)*(sy-my)) / d
-    uy = ((sx*sx+sy*sy)*(ex-mx) + (mx*mx+my*my)*(sx-ex) + (ex*ex+ey*ey)*(mx-sx)) / d
-    r = math.hypot(sx-ux, sy-uy)
-    a0 = math.atan2(sy-uy, sx-ux)
-    a1 = math.atan2(ey-uy, ex-ux)
-    am = math.atan2(my-uy, mx-ux)
+    ux = (
+        (sx * sx + sy * sy) * (my - ey)
+        + (mx * mx + my * my) * (ey - sy)
+        + (ex * ex + ey * ey) * (sy - my)
+    ) / d
+    uy = (
+        (sx * sx + sy * sy) * (ex - mx)
+        + (mx * mx + my * my) * (sx - ex)
+        + (ex * ex + ey * ey) * (mx - sx)
+    ) / d
+    r = math.hypot(sx - ux, sy - uy)
+    a0 = math.atan2(sy - uy, sx - ux)
+    a1 = math.atan2(ey - uy, ex - ux)
+    am = math.atan2(my - uy, mx - ux)
     # Choose sweep direction that passes through mid
-    span_ccw = (a1 - a0) % (2*math.pi)
-    span_cw  = -((a0 - a1) % (2*math.pi))
-    mid_ccw  = (am - a0) % (2*math.pi)
+    span_ccw = (a1 - a0) % (2 * math.pi)
+    span_cw = -((a0 - a1) % (2 * math.pi))
+    mid_ccw = (am - a0) % (2 * math.pi)
     span = span_ccw if mid_ccw <= span_ccw else span_cw
     path = QPainterPath()
     for i in range(steps + 1):
@@ -221,79 +234,95 @@ def _arc_path(sx: float, sy: float, mx: float, my: float,
 # Graphics parser
 # ---------------------------------------------------------------------------
 
+
 def _is_filled(node: list) -> bool:
-    fn = _find(node, 'fill')
+    fn = _find(node, "fill")
     if fn is None:
         return False
-    tn = _find(fn, 'type')
-    return tn is not None and _atom(tn, 1) not in ('none', '')
+    tn = _find(fn, "type")
+    return tn is not None and _atom(tn, 1) not in ("none", "")
 
 
 def _parse_graphics(node: list, out: list[_LibGraphic]) -> None:
-    for poly in _find_all(node, 'polyline'):
-        pts_n = _find(poly, 'pts')
+    for poly in _find_all(node, "polyline"):
+        pts_n = _find(poly, "pts")
         if pts_n is None:
             continue
-        pts2 = [(float(_atom(xy, 1, '0')), float(_atom(xy, 2, '0')))
-                for xy in _find_all(pts_n, 'xy')]
-        out.append(_LibGraphic(kind='polyline', pts=pts2, filled=_is_filled(poly)))
+        pts2 = [
+            (float(_atom(xy, 1, "0")), float(_atom(xy, 2, "0"))) for xy in _find_all(pts_n, "xy")
+        ]
+        out.append(_LibGraphic(kind="polyline", pts=pts2, filled=_is_filled(poly)))
 
-    for rect in _find_all(node, 'rectangle'):
-        s = _find(rect, 'start')
-        e = _find(rect, 'end')
+    for rect in _find_all(node, "rectangle"):
+        s = _find(rect, "start")
+        e = _find(rect, "end")
         if s is None or e is None:
             continue
-        x1, y1 = float(_atom(s, 1, '0')), float(_atom(s, 2, '0'))
-        x2, y2 = float(_atom(e, 1, '0')), float(_atom(e, 2, '0'))
-        pts = [(x1,y1),(x2,y1),(x2,y2),(x1,y2),(x1,y1)]
-        out.append(_LibGraphic(kind='polyline', pts=pts, filled=_is_filled(rect)))
+        x1, y1 = float(_atom(s, 1, "0")), float(_atom(s, 2, "0"))
+        x2, y2 = float(_atom(e, 1, "0")), float(_atom(e, 2, "0"))
+        pts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)]
+        out.append(_LibGraphic(kind="polyline", pts=pts, filled=_is_filled(rect)))
 
-    for circ in _find_all(node, 'circle'):
-        c = _find(circ, 'center')
-        rn = _find(circ, 'radius')
+    for circ in _find_all(node, "circle"):
+        c = _find(circ, "center")
+        rn = _find(circ, "radius")
         if c is None or rn is None:
             continue
-        out.append(_LibGraphic(kind='circle',
-                               cx=float(_atom(c,1,'0')), cy=float(_atom(c,2,'0')),
-                               radius=float(_atom(rn,1,'0')), filled=_is_filled(circ)))
+        out.append(
+            _LibGraphic(
+                kind="circle",
+                cx=float(_atom(c, 1, "0")),
+                cy=float(_atom(c, 2, "0")),
+                radius=float(_atom(rn, 1, "0")),
+                filled=_is_filled(circ),
+            )
+        )
 
-    for arc in _find_all(node, 'arc'):
-        s = _find(arc, 'start')
-        m = _find(arc, 'mid')
-        e = _find(arc, 'end')
+    for arc in _find_all(node, "arc"):
+        s = _find(arc, "start")
+        m = _find(arc, "mid")
+        e = _find(arc, "end")
         if None in (s, m, e):
             continue
-        out.append(_LibGraphic(kind='arc', pts=[
-            (float(_atom(s,1,'0')), float(_atom(s,2,'0'))),
-            (float(_atom(m,1,'0')), float(_atom(m,2,'0'))),
-            (float(_atom(e,1,'0')), float(_atom(e,2,'0'))),
-        ]))
+        out.append(
+            _LibGraphic(
+                kind="arc",
+                pts=[
+                    (float(_atom(s, 1, "0")), float(_atom(s, 2, "0"))),
+                    (float(_atom(m, 1, "0")), float(_atom(m, 2, "0"))),
+                    (float(_atom(e, 1, "0")), float(_atom(e, 2, "0"))),
+                ],
+            )
+        )
 
-    for pin in _find_all(node, 'pin'):
-        at = _find(pin, 'at')
+    for pin in _find_all(node, "pin"):
+        at = _find(pin, "at")
         if at is None:
             continue
-        ln = _find(pin, 'length')
-        num_n = _find(pin, 'number')
-        name_n = _find(pin, 'name')
-        out.append(_LibGraphic(
-            kind='pin',
-            pts=[(float(_atom(at,1,'0')), float(_atom(at,2,'0')))],
-            pin_angle=float(_atom(at,3,'0')),
-            pin_length=float(_atom(ln,1,'1.016')) if ln else 1.016,
-            pin_number=_atom(num_n,1) if num_n else '',
-            pin_name=_atom(name_n,1) if name_n else '',
-        ))
+        ln = _find(pin, "length")
+        num_n = _find(pin, "number")
+        name_n = _find(pin, "name")
+        out.append(
+            _LibGraphic(
+                kind="pin",
+                pts=[(float(_atom(at, 1, "0")), float(_atom(at, 2, "0")))],
+                pin_angle=float(_atom(at, 3, "0")),
+                pin_length=float(_atom(ln, 1, "1.016")) if ln else 1.016,
+                pin_number=_atom(num_n, 1) if num_n else "",
+                pin_name=_atom(name_n, 1) if name_n else "",
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
 # Full schematic parser
 # ---------------------------------------------------------------------------
 
+
 def _parse_schematic(path: Path) -> _Schematic:
-    text = path.read_text(encoding='utf-8', errors='replace')
+    text = path.read_text(encoding="utf-8", errors="replace")
     root = _parse_sexp(text)
-    if not isinstance(root, list) or not root or root[0] != 'kicad_sch':
+    if not isinstance(root, list) or not root or root[0] != "kicad_sch":
         raise ValueError(f"Not a valid KiCad 6/7 .kicad_sch: {path.name}")
 
     sch = _Schematic()
@@ -305,93 +334,96 @@ def _parse_schematic(path: Path) -> _Schematic:
         ys.append(y)
 
     # -- Wires & buses --
-    for tag, is_bus in (('wire', False), ('bus_wire', False), ('bus', True)):
+    for tag, is_bus in (("wire", False), ("bus_wire", False), ("bus", True)):
         for w in _find_all(root, tag):
-            pts = _find(w, 'pts')
+            pts = _find(w, "pts")
             if pts is None:
                 continue
-            xys = _find_all(pts, 'xy')
+            xys = _find_all(pts, "xy")
             if len(xys) >= 2:
-                x1, y1 = float(_atom(xys[0], 1, '0')), float(_atom(xys[0], 2, '0'))
-                x2, y2 = float(_atom(xys[1], 1, '0')), float(_atom(xys[1], 2, '0'))
-                sch.wires.append(_Wire(x1, y1, x2, y2, is_bus=(tag == 'bus')))
+                x1, y1 = float(_atom(xys[0], 1, "0")), float(_atom(xys[0], 2, "0"))
+                x2, y2 = float(_atom(xys[1], 1, "0")), float(_atom(xys[1], 2, "0"))
+                sch.wires.append(_Wire(x1, y1, x2, y2, is_bus=(tag == "bus")))
                 _track(x1, y1)
                 _track(x2, y2)
 
     # -- Junctions --
-    for j in _find_all(root, 'junction'):
-        at = _find(j, 'at')
+    for j in _find_all(root, "junction"):
+        at = _find(j, "at")
         if at:
-            x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
+            x, y = float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))
             sch.junctions.append(_Junction(x, y))
             _track(x, y)
 
     # -- No-connects --
-    for nc in _find_all(root, 'no_connect'):
-        at = _find(nc, 'at')
+    for nc in _find_all(root, "no_connect"):
+        at = _find(nc, "at")
         if at:
-            x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
+            x, y = float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))
             sch.noconns.append(_NoConnect(x, y))
             _track(x, y)
 
     # -- Labels --
-    for tag, kind in (('label', 'local'), ('global_label', 'global'),
-                      ('hierarchical_label', 'hier')):
+    for tag, kind in (
+        ("label", "local"),
+        ("global_label", "global"),
+        ("hierarchical_label", "hier"),
+    ):
         for lbl in _find_all(root, tag):
             name = _atom(lbl, 1)
-            at = _find(lbl, 'at')
+            at = _find(lbl, "at")
             if name and at:
-                x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
-                a = float(_atom(at, 3, '0'))
+                x, y = float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))
+                a = float(_atom(at, 3, "0"))
                 sch.labels.append(_Label(name, x, y, a, kind))
                 _track(x, y)
 
     # -- Lib symbol definitions --
-    ls = _find(root, 'lib_symbols')
+    ls = _find(root, "lib_symbols")
     if ls:
-        for sym in _find_all(ls, 'symbol'):
+        for sym in _find_all(ls, "symbol"):
             lib_id = _atom(sym, 1)
             sdef = _SymDef(lib_id=lib_id)
-            for sub in _find_all(sym, 'symbol'):
+            for sub in _find_all(sym, "symbol"):
                 sub_name = _atom(sub, 1)
                 # skip De Morgan (body style 2)
-                parts = sub_name.rsplit('_', 1)
-                if len(parts) == 2 and parts[1] == '2':
+                parts = sub_name.rsplit("_", 1)
+                if len(parts) == 2 and parts[1] == "2":
                     continue
                 _parse_graphics(sub, sdef.graphics)
             sch.sym_defs[lib_id] = sdef
 
     # -- Placed symbols --
-    for sym in _find_all(root, 'symbol'):
-        lib_id_n = _find(sym, 'lib_id')
+    for sym in _find_all(root, "symbol"):
+        lib_id_n = _find(sym, "lib_id")
         if lib_id_n is None:
             continue
         lib_id = _atom(lib_id_n, 1)
-        if lib_id.startswith('power:'):
+        if lib_id.startswith("power:"):
             # treat power symbols as labels
-            at = _find(sym, 'at')
+            at = _find(sym, "at")
             if at:
-                x, y = float(_atom(at, 1, '0')), float(_atom(at, 2, '0'))
-                pname = _prop(sym, 'Value') or lib_id.split(':')[-1]
-                sch.labels.append(_Label(pname, x, y, 0.0, 'power'))
+                x, y = float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))
+                pname = _prop(sym, "Value") or lib_id.split(":")[-1]
+                sch.labels.append(_Label(pname, x, y, 0.0, "power"))
                 _track(x, y)
             continue
 
-        ref = _prop(sym, 'Reference')
-        if not ref or ref.startswith('#'):
+        ref = _prop(sym, "Reference")
+        if not ref or ref.startswith("#"):
             continue
 
-        at = _find(sym, 'at')
+        at = _find(sym, "at")
         if at is None:
             continue
-        sx = float(_atom(at, 1, '0'))
-        sy_ = float(_atom(at, 2, '0'))
-        sa = float(_atom(at, 3, '0'))
-        mir = _find(sym, 'mirror')
-        mx_ = isinstance(mir, list) and _atom(mir, 1) == 'x'
-        my_ = isinstance(mir, list) and _atom(mir, 1) == 'y'
+        sx = float(_atom(at, 1, "0"))
+        sy_ = float(_atom(at, 2, "0"))
+        sa = float(_atom(at, 3, "0"))
+        mir = _find(sym, "mirror")
+        mx_ = isinstance(mir, list) and _atom(mir, 1) == "x"
+        my_ = isinstance(mir, list) and _atom(mir, 1) == "y"
 
-        value = _prop(sym, 'Value')
+        value = _prop(sym, "Value")
 
         # Property positions (absolute in placed symbol)
         ref_x = sx
@@ -402,33 +434,44 @@ def _parse_schematic(path: Path) -> _Schematic:
         val_y = sy_
         val_a = 0.0
         hide_val = False
-        for prop in _find_all(sym, 'property'):
+        for prop in _find_all(sym, "property"):
             pname = _atom(prop, 1)
-            pat = _find(prop, 'at')
+            pat = _find(prop, "at")
             if pat is None:
                 continue
-            px_, py_ = float(_atom(pat,1,'0')), float(_atom(pat,2,'0'))
-            pa_ = float(_atom(pat,3,'0'))
-            eff = _find(prop, 'effects')
-            hidden = eff is not None and _find(eff, 'hide') is not None
-            if pname == 'Reference':
+            px_, py_ = float(_atom(pat, 1, "0")), float(_atom(pat, 2, "0"))
+            pa_ = float(_atom(pat, 3, "0"))
+            eff = _find(prop, "effects")
+            hidden = eff is not None and _find(eff, "hide") is not None
+            if pname == "Reference":
                 ref_x, ref_y, ref_a, hide_ref = px_, py_, pa_, hidden
-            elif pname == 'Value':
+            elif pname == "Value":
                 val_x, val_y, val_a, hide_val = px_, py_, pa_, hidden
 
         psym = _PlacedSym(
-            lib_id=lib_id, x=sx, y=sy_, angle=sa,
-            mirror_x=mx_, mirror_y=my_,
-            reference=ref, value=value,
-            ref_x=ref_x, ref_y=ref_y, ref_angle=ref_a, hide_ref=hide_ref,
-            val_x=val_x, val_y=val_y, val_angle=val_a, hide_val=hide_val,
+            lib_id=lib_id,
+            x=sx,
+            y=sy_,
+            angle=sa,
+            mirror_x=mx_,
+            mirror_y=my_,
+            reference=ref,
+            value=value,
+            ref_x=ref_x,
+            ref_y=ref_y,
+            ref_angle=ref_a,
+            hide_ref=hide_ref,
+            val_x=val_x,
+            val_y=val_y,
+            val_angle=val_a,
+            hide_val=hide_val,
         )
         sch.syms.append(psym)
         _track(sx, sy_)
 
     if xs:
         pad = 5.0
-        sch.bbox = (min(xs)-pad, min(ys)-pad, max(xs)+pad, max(ys)+pad)
+        sch.bbox = (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
 
     _build_net_connectivity(sch)
     return sch
@@ -439,13 +482,13 @@ def _parse_schematic(path: Path) -> _Schematic:
 # ---------------------------------------------------------------------------
 
 _C_HIGHLIGHT = QColor("#ffff00")
-_C_OP_LABEL  = QColor("#00ffcc")
+_C_OP_LABEL = QColor("#00ffcc")
 
 
 class _SchCanvas(QWidget):
     """Inner painter canvas with pan/zoom, net highlighting, and OP annotations."""
 
-    net_probed = Signal(str)   # emitted with net name on Ctrl+click
+    net_probed = Signal(str)  # emitted with net name on Ctrl+click
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -471,7 +514,7 @@ class _SchCanvas(QWidget):
             self._sch = None
             self._err = str(exc)
         else:
-            self._err = ''
+            self._err = ""
         self._highlighted_net = None
         self._fitted = False
         self.update()
@@ -515,10 +558,10 @@ class _SchCanvas(QWidget):
         self._fit()
 
     def zoom_in(self) -> None:
-        self._zoom(1.25, self.width()/2, self.height()/2)
+        self._zoom(1.25, self.width() / 2, self.height() / 2)
 
     def zoom_out(self) -> None:
-        self._zoom(0.8, self.width()/2, self.height()/2)
+        self._zoom(0.8, self.width() / 2, self.height() / 2)
 
     # -- private --
 
@@ -528,10 +571,10 @@ class _SchCanvas(QWidget):
         xmin, ymin, xmax, ymax = self._sch.bbox
         w_mm = max(xmax - xmin, 1.0)
         h_mm = max(ymax - ymin, 1.0)
-        sx = (self.width()  - 20) / w_mm
+        sx = (self.width() - 20) / w_mm
         sy = (self.height() - 20) / h_mm
         self._scale = min(sx, sy, 40.0)
-        self._pan_x = (self.width()  - w_mm * self._scale) / 2 - xmin * self._scale
+        self._pan_x = (self.width() - w_mm * self._scale) / 2 - xmin * self._scale
         self._pan_y = (self.height() - h_mm * self._scale) / 2 - ymin * self._scale
         self._fitted = True
         self.update()
@@ -553,7 +596,7 @@ class _SchCanvas(QWidget):
             self._fit()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        factor = 1.15 if event.angleDelta().y() > 0 else 1/1.15
+        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         pos = event.position()
         self._zoom(factor, pos.x(), pos.y())
 
@@ -607,13 +650,13 @@ class _SchCanvas(QWidget):
         p.fillRect(self.rect(), _C_BG)
 
         if self._sch is None:
-            msg = getattr(self, '_err', '') or "No schematic loaded"
+            msg = getattr(self, "_err", "") or "No schematic loaded"
             p.setPen(QPen(_C_REF))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, msg)
             return
 
         sch = self._sch
-        lw = max(0.05, 0.15 / self._scale)   # line width in mm
+        lw = max(0.05, 0.15 / self._scale)  # line width in mm
         lw_bus = lw * 2.5
 
         p.translate(self._pan_x, self._pan_y)
@@ -622,8 +665,8 @@ class _SchCanvas(QWidget):
         # 1. Wires (with net highlighting)
         hl_net = self._highlighted_net
         pen_wire = QPen(_C_WIRE, lw, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        pen_hl   = QPen(_C_HIGHLIGHT, lw * 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        pen_bus  = QPen(_C_BUS, lw_bus, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        pen_hl = QPen(_C_HIGHLIGHT, lw * 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+        pen_bus = QPen(_C_BUS, lw_bus, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
 
         for i, w in enumerate(sch.wires):
             if w.is_bus:
@@ -649,13 +692,14 @@ class _SchCanvas(QWidget):
         p.setPen(QPen(_C_NCONN, lw))
         nc_s = 0.6
         for nc in sch.noconns:
-            p.drawLine(QPointF(nc.x-nc_s, nc.y-nc_s), QPointF(nc.x+nc_s, nc.y+nc_s))
-            p.drawLine(QPointF(nc.x+nc_s, nc.y-nc_s), QPointF(nc.x-nc_s, nc.y+nc_s))
+            p.drawLine(QPointF(nc.x - nc_s, nc.y - nc_s), QPointF(nc.x + nc_s, nc.y + nc_s))
+            p.drawLine(QPointF(nc.x + nc_s, nc.y - nc_s), QPointF(nc.x - nc_s, nc.y + nc_s))
 
         # 4. Symbol bodies
-        pen_body   = QPen(_C_BODY, lw, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
-                          Qt.PenJoinStyle.RoundJoin)
-        pen_pin    = QPen(_C_PIN, lw)
+        pen_body = QPen(
+            _C_BODY, lw, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin
+        )
+        pen_pin = QPen(_C_PIN, lw)
         brush_fill = QBrush(QColor(30, 30, 50))
 
         for sym in sch.syms:
@@ -664,19 +708,19 @@ class _SchCanvas(QWidget):
                 # draw a small cross placeholder
                 p.setPen(pen_body)
                 cs = 1.0
-                p.drawLine(QPointF(sym.x-cs, sym.y), QPointF(sym.x+cs, sym.y))
-                p.drawLine(QPointF(sym.x, sym.y-cs), QPointF(sym.x, sym.y+cs))
+                p.drawLine(QPointF(sym.x - cs, sym.y), QPointF(sym.x + cs, sym.y))
+                p.drawLine(QPointF(sym.x, sym.y - cs), QPointF(sym.x, sym.y + cs))
                 continue
 
             p.save()
             p.translate(sym.x, sym.y)
-            p.rotate(-sym.angle)         # KiCad CCW → Qt CW, so negate
+            p.rotate(-sym.angle)  # KiCad CCW → Qt CW, so negate
             sx_m = -1.0 if sym.mirror_x else 1.0
             sy_m = -1.0 if sym.mirror_y else 1.0
             p.scale(sx_m, sy_m)
 
             for g in sdef.graphics:
-                if g.kind == 'polyline':
+                if g.kind == "polyline":
                     if len(g.pts) < 2:
                         continue
                     path = QPainterPath()
@@ -691,7 +735,7 @@ class _SchCanvas(QWidget):
                     else:
                         p.drawPath(path)
 
-                elif g.kind == 'circle':
+                elif g.kind == "circle":
                     p.setPen(pen_body)
                     if g.filled:
                         p.setBrush(brush_fill)
@@ -699,13 +743,13 @@ class _SchCanvas(QWidget):
                     if g.filled:
                         p.setBrush(Qt.BrushStyle.NoBrush)
 
-                elif g.kind == 'arc' and len(g.pts) == 3:
+                elif g.kind == "arc" and len(g.pts) == 3:
                     (ax0, ay0), (axm, aym), (ax1, ay1) = g.pts
                     path = _arc_path(ax0, ay0, axm, aym, ax1, ay1)
                     p.setPen(pen_body)
                     p.drawPath(path)
 
-                elif g.kind == 'pin':
+                elif g.kind == "pin":
                     px, py = g.pts[0]
                     pr = math.radians(g.pin_angle)
                     # pin stub goes from tip (connection) toward body
@@ -719,19 +763,19 @@ class _SchCanvas(QWidget):
         # 5. Labels & text (drawn in screen coords via helper)
         for lbl in sch.labels:
             color = {
-                'local': _C_LABEL, 'global': _C_GLABEL,
-                'hier': _C_GLABEL, 'power': _C_POWER,
+                "local": _C_LABEL,
+                "global": _C_GLABEL,
+                "hier": _C_GLABEL,
+                "power": _C_POWER,
             }.get(lbl.kind, _C_LABEL)
             self._draw_label(p, lbl.x, lbl.y, lbl.angle, lbl.text, color)
 
         # 6. Ref / value text
         for sym in sch.syms:
             if not sym.hide_ref:
-                self._draw_label(p, sym.ref_x, sym.ref_y, sym.ref_angle,
-                                 sym.reference, _C_REF)
+                self._draw_label(p, sym.ref_x, sym.ref_y, sym.ref_angle, sym.reference, _C_REF)
             if not sym.hide_val and sym.value and sym.value != sym.reference:
-                self._draw_label(p, sym.val_x, sym.val_y, sym.val_angle,
-                                 sym.value, _C_VALUE)
+                self._draw_label(p, sym.val_x, sym.val_y, sym.val_angle, sym.value, _C_VALUE)
 
         # 7. OP voltage annotations
         if self._show_op and self._op_voltages:
@@ -747,16 +791,15 @@ class _SchCanvas(QWidget):
                     if k.lower() == key or k.lower() == f"v({key})":
                         sx = lbl.x * self._scale + self._pan_x
                         sy = lbl.y * self._scale + self._pan_y
-                        p.drawText(QRectF(sx + 2, sy - 14, 80, 14),
-                                   f"{v:.3g}V")
+                        p.drawText(QRectF(sx + 2, sy - 14, 80, 14), f"{v:.3g}V")
                         break
             p.restore()
 
         p.end()
 
-    def _draw_label(self, p: QPainter,
-                    x_mm: float, y_mm: float, angle_deg: float,
-                    text: str, color: QColor) -> None:
+    def _draw_label(
+        self, p: QPainter, x_mm: float, y_mm: float, angle_deg: float, text: str, color: QColor
+    ) -> None:
         """Draw text at schematic-space (x_mm, y_mm), always legible size."""
         sx = x_mm * self._scale + self._pan_x
         sy = y_mm * self._scale + self._pan_y
@@ -785,10 +828,11 @@ class _SchCanvas(QWidget):
 # Public dock widget
 # ---------------------------------------------------------------------------
 
+
 class SchematicView(QWidget):
     """Read-only KiCad schematic viewer, suitable for embedding in a QDockWidget."""
 
-    net_probed = Signal(str)   # forwarded from canvas
+    net_probed = Signal(str)  # forwarded from canvas
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)

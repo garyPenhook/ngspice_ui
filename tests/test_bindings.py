@@ -31,8 +31,10 @@ def test_find_lib_missing_raises(monkeypatch):
     """NgSpiceNotFoundError is raised with an actionable message when the lib is absent."""
     monkeypatch.setenv("NGSPICE_LIB", "")
     import ctypes.util as _cu
+
     monkeypatch.setattr(_cu, "find_library", lambda _: None)
     import glob as _glob
+
     monkeypatch.setattr(_glob, "glob", lambda *a, **kw: [])
     with pytest.raises(NgSpiceNotFoundError, match="NGSPICE_LIB"):
         _find_lib_path()

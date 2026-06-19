@@ -235,7 +235,8 @@ class MainWindowUI:
         self._schematic_dock.setObjectName("dock_schematic_kicad")
         self._schematic_dock.setWidget(self._schematic_view)
         self._schematic_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
             | Qt.DockWidgetArea.BottomDockWidgetArea
         )
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._schematic_dock)
@@ -248,7 +249,8 @@ class MainWindowUI:
         self._eagle_dock.setObjectName("dock_schematic_eagle")
         self._eagle_dock.setWidget(self._eagle_view)
         self._eagle_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
             | Qt.DockWidgetArea.BottomDockWidgetArea
         )
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._eagle_dock)

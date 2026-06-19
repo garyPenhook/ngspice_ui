@@ -5,6 +5,7 @@ session that records loaded netlists, and drive completion by emitting
 sim_finished manually. Requires PySide6 (a hard GUI dependency) but not the
 ngspice shared library.
 """
+
 from __future__ import annotations
 
 import queue
@@ -113,7 +114,7 @@ def test_monte_carlo_disconnects_after_completion(qapp):
     ctrl.mc_finished.connect(lambda t: finished.append(t))
 
     ctrl.run_monte_carlo(["* only\nR 1 0 1"], "op")
-    ctrl.sim_finished.emit()      # completes the single run
+    ctrl.sim_finished.emit()  # completes the single run
     assert finished == [1]
 
     # A stray sim_finished after completion must not re-trigger anything.
