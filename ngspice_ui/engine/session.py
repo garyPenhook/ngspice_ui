@@ -60,7 +60,10 @@ class NgSpiceSession:
         suppress_spiceinit: bool = False,
     ) -> None:
         self._lib = get_lib()
-        self.event_queue: queue.Queue[SimEvent] = queue.Queue()
+        # Bounded to prevent unbounded backlog when simulation outpaces GUI drain.
+        # DataPointEvents are dropped on full; control events (start/stop/error)
+        # are rare enough that they will not hit this limit in practice.
+        self.event_queue: queue.Queue[SimEvent] = queue.Queue(maxsize=5_000)
 
         # Must keep callback objects alive for the entire session lifetime
         self._callbacks = build_callbacks(self.event_queue)

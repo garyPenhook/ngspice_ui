@@ -52,13 +52,21 @@ def _make_controller():
     return ctrl, session
 
 
-def test_run_param_sweep_prepends_step_lines(qapp):
+def test_run_param_sweep_inserts_step_lines_after_title(qapp):
     ctrl, session = _make_controller()
-    ctrl.run_param_sweep("R1 1 0 1k", [".step param r 1k 10k 1k"], "tran 1u 1m")
+    ctrl.run_param_sweep(
+        "* RC low-pass\nR1 1 2 1k\nC1 2 0 1n",
+        [".step param r 1k 10k 1k"],
+        "tran 1u 1m",
+    )
     assert session.run_count == 1
     loaded = session.loaded[0]
-    assert loaded[0] == ".step param r 1k 10k 1k"
-    assert "R1 1 0 1k" in loaded
+    # SPICE title (line 0) must be preserved as-is
+    assert loaded[0] == "* RC low-pass"
+    # Step directive must follow the title, not precede it
+    assert loaded[1] == ".step param r 1k 10k 1k"
+    # Analysis line at the end, netlist body in between
+    assert "R1 1 2 1k" in loaded
     assert loaded[-1] == "tran 1u 1m"
 
 
@@ -119,3 +127,46 @@ def test_monte_carlo_empty_list_is_noop(qapp):
     ctrl, session = _make_controller()
     ctrl.run_monte_carlo([], "op")
     assert session.run_count == 0
+
+
+# ------------------------------------------------------------------
+# BGThreadEvent lifecycle
+#
+# Manual §15.3.3.6: the raw NG_BOOL from ngspice is *false* while the
+# background thread is running and *true* once it has stopped.
+# callbacks._bg_thread_running normalises this so that:
+#   BGThreadEvent(running=True)  → sim_started  (thread just started)
+#   BGThreadEvent(running=False) → sim_finished (thread just stopped)
+# These tests inject already-normalised BGThreadEvents (bypassing the
+# callback) and verify the controller's signal dispatch.
+# ------------------------------------------------------------------
+
+from ngspice_ui.engine.callbacks import BGThreadEvent  # noqa: E402
+
+
+def test_bg_thread_event_running_true_emits_sim_started(qapp):
+    ctrl, session = _make_controller()
+    started: list[int] = []
+    finished: list[int] = []
+    ctrl.sim_started.connect(lambda: started.append(1))
+    ctrl.sim_finished.connect(lambda: finished.append(1))
+
+    session.event_queue.put_nowait(BGThreadEvent(running=True))
+    ctrl._drain_queue()
+
+    assert started == [1]
+    assert finished == []
+
+
+def test_bg_thread_event_running_false_emits_sim_finished(qapp):
+    ctrl, session = _make_controller()
+    started: list[int] = []
+    finished: list[int] = []
+    ctrl.sim_started.connect(lambda: started.append(1))
+    ctrl.sim_finished.connect(lambda: finished.append(1))
+
+    session.event_queue.put_nowait(BGThreadEvent(running=False))
+    ctrl._drain_queue()
+
+    assert finished == [1]
+    assert started == []

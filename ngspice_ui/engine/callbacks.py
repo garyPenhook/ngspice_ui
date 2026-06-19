@@ -131,9 +131,12 @@ def build_callbacks(
             values[name] = val
             if v.is_scale:
                 scale_name = name
-        event_queue.put_nowait(
-            DataPointEvent(vec_index=all_.vecindex, values=values, scale_name=scale_name)
-        )
+        try:
+            event_queue.put_nowait(
+                DataPointEvent(vec_index=all_.vecindex, values=values, scale_name=scale_name)
+            )
+        except queue.Full:
+            pass  # drop live-preview point; final result is read via session.get_vector()
         return 0
 
     def _send_init_data(raw_ptr: int, _ident: int, _user: Any) -> int:
@@ -159,7 +162,11 @@ def build_callbacks(
         return 0
 
     def _bg_thread_running(running: bool, _ident: int, _user: Any) -> int:
-        event_queue.put_nowait(BGThreadEvent(running=bool(running)))
+        # Manual §15.3.3.6: NG_BOOL is *false* while the bg thread is running
+        # and *true* once it has stopped — the inverse of what the name implies.
+        # Normalise here so BGThreadEvent.running=True means "simulation started"
+        # and BGThreadEvent.running=False means "simulation finished".
+        event_queue.put_nowait(BGThreadEvent(running=not bool(running)))
         return 0
 
     return {

@@ -151,10 +151,8 @@ class SimController(QObject):
         step_lines: list[str],
         analysis_line: str | None,
     ) -> None:
-        """Prepend *step_lines* to *netlist* and run a single swept simulation."""
-        prefix = "\n".join(step_lines)
-        combined = prefix + "\n" + netlist if prefix else netlist
-        self.run_with_analysis(combined, analysis_line)
+        """Run a single swept simulation with *step_lines* inserted after the SPICE title."""
+        self.run_with_analysis(netlist, analysis_line, extra_lines=step_lines or None)
 
     # ------------------------------------------------------------------
     # Monte Carlo (sequential bg_run, advanced by sim_finished)
@@ -201,7 +199,7 @@ class SimController(QObject):
             self._mc_connected = False
             self.mc_finished.emit(self._mc_total)
 
-    _MAX_DATA_EVENTS_PER_DRAIN = 200
+    _MAX_DATA_EVENTS_PER_DRAIN = 2_500
 
     @Slot()
     def _drain_queue(self) -> None:

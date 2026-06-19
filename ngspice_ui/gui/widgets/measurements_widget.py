@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import math
 
 import numpy as np
@@ -13,6 +14,61 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+# ---------------------------------------------------------------------------
+# Expression sandbox
+# ---------------------------------------------------------------------------
+
+_WHITELISTED_NAMES: frozenset[str] = frozenset({
+    "np", "math", "abs", "round", "min", "max", "sum", "len",
+    "float", "int", "bool", "vec",
+    "True", "False", "None",
+})
+
+_SAFE_NODES = (
+    ast.Expression, ast.Constant,
+    ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
+    ast.IfExp, ast.List, ast.Tuple,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+    ast.MatMult,
+    ast.USub, ast.UAdd, ast.Invert, ast.Not,
+    ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq,
+    ast.And, ast.Or,
+    ast.Subscript, ast.Index, ast.Slice,
+    # Context and keyword nodes — structural, not executable
+    ast.Load, ast.Store, ast.Del,
+    ast.keyword,
+)
+
+
+def _validate_expr(node: ast.AST) -> None:
+    """Raise ValueError if *node* contains anything outside the safe subset."""
+    if isinstance(node, ast.Name):
+        if node.id not in _WHITELISTED_NAMES:
+            raise ValueError(f"name not allowed: {node.id!r}")
+    elif isinstance(node, ast.Attribute):
+        if node.attr.startswith("_"):
+            raise ValueError(f"private attribute access not allowed: {node.attr!r}")
+        _validate_expr(node.value)
+    elif isinstance(node, ast.Call):
+        _validate_expr(node.func)
+        for arg in node.args:
+            _validate_expr(arg)
+        for kw in node.keywords:
+            _validate_expr(kw.value)
+    elif isinstance(node, _SAFE_NODES):
+        for child in ast.iter_child_nodes(node):
+            _validate_expr(child)
+    else:
+        raise ValueError(f"construct not allowed: {type(node).__name__!r}")
+
+
+def _safe_eval(expr: str, ns: dict) -> object:
+    """Parse, validate, then eval *expr* against *ns*."""
+    tree = ast.parse(expr, mode="eval")
+    _validate_expr(tree)
+    return eval(compile(tree, "<measurement>", "eval"), ns)  # noqa: S307
 
 
 class MeasurementsWidget(QWidget):
@@ -139,7 +195,7 @@ class MeasurementsWidget(QWidget):
                 val_item.setText("")
                 continue
             try:
-                result = eval(expr, ns)  # noqa: S307
+                result = _safe_eval(expr, ns)
                 if isinstance(result, np.ndarray):
                     result = float(result.flat[-1])
                 if isinstance(result, complex):
