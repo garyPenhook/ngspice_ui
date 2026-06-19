@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
+from ..models.project import ProjectDocument, ProjectError
 from .controllers.sim_controller import SimController
 from .widgets.analysis_panel import AnalysisPanel
 from .widgets.console import ConsoleWidget
@@ -569,17 +569,16 @@ class MainWindow(QMainWindow):
             self._write_project(Path(path))
 
     def _write_project(self, p: Path) -> None:
-        data = {
-            "version": 2,
-            "netlist": self._editor.toPlainText(),
-            "analysis": self._analysis_panel.get_config(),
-            "measurements": self._measurements.get_config(),
-            "notes": self._notes.get_config(),
-            "script": self._script.get_config(),
-            "cosim": self._cosim.get_config(),
-        }
+        doc = ProjectDocument(
+            netlist=self._editor.toPlainText(),
+            analysis=self._analysis_panel.get_config(),
+            measurements=self._measurements.get_config(),
+            notes=self._notes.get_config(),
+            script=self._script.get_config(),
+            cosim=self._cosim.get_config(),
+        )
         try:
-            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            p.write_text(doc.dumps(), encoding="utf-8")
         except OSError as exc:
             QMessageBox.critical(self, "Save Project Error", str(exc))
             return
@@ -603,26 +602,19 @@ class MainWindow(QMainWindow):
 
     def _load_project_from(self, p: Path) -> None:
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            doc = ProjectDocument.loads(p.read_text(encoding="utf-8"))
+        except OSError as exc:
             QMessageBox.critical(self, "Load Project Error", str(exc))
             return
-        if not isinstance(raw, dict):
-            QMessageBox.critical(self, "Load Project Error",
-                                 "Invalid project file: root must be a JSON object.")
+        except ProjectError as exc:
+            QMessageBox.critical(self, "Load Project Error", str(exc))
             return
-        data: dict = raw
-        self._editor.set_content(data.get("netlist", ""), path=None)
-        if isinstance(data.get("analysis"), dict):
-            self._analysis_panel.set_config(data["analysis"])
-        if isinstance(data.get("measurements"), list):
-            self._measurements.set_config(data["measurements"])
-        if isinstance(data.get("notes"), str):
-            self._notes.set_config(data["notes"])
-        if isinstance(data.get("script"), dict):
-            self._script.set_config(data["script"])
-        if isinstance(data.get("cosim"), dict):
-            self._cosim.set_config(data["cosim"])
+        self._editor.set_content(doc.netlist, path=None)
+        self._analysis_panel.set_config(doc.analysis)
+        self._measurements.set_config(doc.measurements)
+        self._notes.set_config(doc.notes)
+        self._script.set_config(doc.script)
+        self._cosim.set_config(doc.cosim)
         self._current_project_path = p
         self._project_dirty = False
         self._add_to_recent(str(p))
