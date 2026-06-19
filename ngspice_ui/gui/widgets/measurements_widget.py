@@ -33,7 +33,7 @@ class MeasurementsWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._session = None
+        self._result = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
@@ -66,8 +66,8 @@ class MeasurementsWidget(QWidget):
         btn_row.addWidget(btn_eval)
         outer.addLayout(btn_row)
 
-    def set_session(self, session) -> None:
-        self._session = session
+    def set_result(self, result) -> None:
+        self._result = result
 
     # ------------------------------------------------------------------
     # Table helpers
@@ -95,9 +95,9 @@ class MeasurementsWidget(QWidget):
 
     @Slot()
     def evaluate(self) -> None:
-        if self._session is None:
+        if self._result is None:
             return
-        plot = self._session.current_plot()
+        plot = self._result.current_plot()
         if not plot or plot == "const":
             for row in range(self._table.rowCount()):
                 item = self._table.item(row, 2)
@@ -108,7 +108,7 @@ class MeasurementsWidget(QWidget):
         def _vec(name: str) -> np.ndarray:
             for candidate in (name, f"{plot}.{name}"):
                 try:
-                    return self._session.get_vector(candidate).data
+                    return self._result.get_vector(candidate).data
                 except Exception:
                     pass
             raise KeyError(f"vector not found: {name!r}")

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..models.project import ProjectDocument, ProjectError
+from ..models.result import SimulationResult
 from .controllers.sim_controller import SimController
 from .widgets.analysis_panel import AnalysisPanel
 from .widgets.console import ConsoleWidget
@@ -397,10 +398,10 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         ctrl = self._controller
-        self._plot.set_session(ctrl.session)
+        # Plot + measurements read an immutable SimulationResult snapshot built
+        # after each run; script + co-sim need the live session for interaction.
         self._script.set_context(ctrl.session, ctrl)
         self._cosim.set_session(ctrl.session)
-        self._measurements.set_session(ctrl.session)
 
         self._act_new.triggered.connect(self._new_file)
         self._act_open.triggered.connect(self._open_file)
@@ -700,7 +701,7 @@ class MainWindow(QMainWindow):
         if not plot_name or plot_name == "const":
             self._console.append_line("-- no simulation data to plot --")
             return
-        self._plot.refresh_from_session()
+        self._plot.refresh()
 
     # ------------------------------------------------------------------
     # Lint
@@ -889,19 +890,23 @@ class MainWindow(QMainWindow):
             self._act_resume.setEnabled(False)
             self._set_status(f"Done  ({elapsed:.2f} s)")
 
+        # Build an immutable snapshot of this run's vectors and hand it to the
+        # read-only consumers (plotting, measurements, OP annotation).
+        result = SimulationResult.from_session(self._controller.session)
+        self._plot.set_result(result)
+        self._measurements.set_result(result)
+
         self._do_plot()
         self._measurements.evaluate()
 
-        # OP annotation
+        # OP annotation — scalar (single-point) vectors are node voltages.
         try:
-            session = self._controller.session
-            plot = session.current_plot()
+            plot = result.current_plot()
             if plot:
-                vecs = session.all_vecs(plot)
                 voltages: dict[str, float] = {}
-                for v in vecs:
+                for v in result.all_vecs(plot):
                     try:
-                        vd = session.get_vector(f"{plot}.{v}")
+                        vd = result.get_vector(f"{plot}.{v}")
                         if len(vd.data) == 1:
                             voltages[v] = float(vd.data.real[0])
                     except Exception:
