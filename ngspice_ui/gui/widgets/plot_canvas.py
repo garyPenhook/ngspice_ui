@@ -69,7 +69,7 @@ class _PlotPane(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._session = None
+        self._result = None
         self._fig = Figure(tight_layout=True)
         self._ax = self._fig.add_subplot(111)
         self._ax2 = None
@@ -177,13 +177,13 @@ class _PlotPane(QWidget):
     # Public API
     # ------------------------------------------------------------------
 
-    def set_session(self, session) -> None:
-        self._session = session
+    def set_result(self, result) -> None:
+        self._result = result
 
     @Slot()
-    def refresh_from_session(self) -> None:
+    def refresh(self) -> None:
         self._stop_live()
-        if self._session is None:
+        if self._result is None:
             return
         self._populate_trace_tree()
         self._replot()
@@ -264,14 +264,14 @@ class _PlotPane(QWidget):
     def _populate_trace_tree(self) -> None:
         self._trace_tree.blockSignals(True)
         self._trace_tree.clear()
-        plots = self._session.all_plots()
-        current = self._session.current_plot()
+        plots = self._result.all_plots()
+        current = self._result.current_plot()
         self._plots_vecs = {}
 
         for plot_name in reversed(plots):
             if plot_name == "const":
                 continue
-            vecs = self._session.all_vecs(plot_name)
+            vecs = self._result.all_vecs(plot_name)
             self._plots_vecs[plot_name] = vecs
             plot_item = QTreeWidgetItem([plot_name])
             plot_item.setData(0, Qt.ItemDataRole.UserRole, ("plot", plot_name))
@@ -322,14 +322,14 @@ class _PlotPane(QWidget):
     # ------------------------------------------------------------------
 
     def _add_derived(self) -> None:
-        if self._session is None:
+        if self._result is None:
             return
-        plot = self._session.current_plot()
+        plot = self._result.current_plot()
 
         def _vec(name: str) -> np.ndarray:
             for cand in (name, f"{plot}.{name}"):
                 try:
-                    return self._session.get_vector(cand).data.real
+                    return self._result.get_vector(cand).data.real
                 except Exception:
                     pass
             raise KeyError(name)
@@ -348,14 +348,14 @@ class _PlotPane(QWidget):
         self._replot()
 
     def _eval_derived(self) -> list[tuple[str, np.ndarray]]:
-        if self._session is None or not self._derived:
+        if self._result is None or not self._derived:
             return []
-        plot = self._session.current_plot()
+        plot = self._result.current_plot()
 
         def _vec(name: str) -> np.ndarray:
             for cand in (name, f"{plot}.{name}"):
                 try:
-                    return self._session.get_vector(cand).data.real
+                    return self._result.get_vector(cand).data.real
                 except Exception:
                     pass
             raise KeyError(name)
@@ -394,9 +394,9 @@ class _PlotPane(QWidget):
                 scale_name = next((v for v in vecs if v.lower() in _SCALE_NAMES), None)
                 x = None
                 if scale_name:
-                    sd = self._session.get_vector(f"{plot_name}.{scale_name}")
+                    sd = self._result.get_vector(f"{plot_name}.{scale_name}")
                     x = sd.data.real
-                vd = self._session.get_vector(f"{plot_name}.{vec_name}")
+                vd = self._result.get_vector(f"{plot_name}.{vec_name}")
                 traces.append((plot_name, vec_name, x, vd.data, vd.is_complex))
             except Exception:
                 pass
@@ -705,7 +705,7 @@ class PlotLab(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._session = None
+        self._result = None
         self._tabs = QTabWidget()
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._close_tab)
@@ -754,12 +754,12 @@ class PlotLab(QWidget):
             widget.deleteLater()
 
     def _pin_result(self) -> None:
-        if self._session is None:
+        if self._result is None:
             return
         pane = _PlotPane()
-        pane.set_session(self._session)
-        pane.refresh_from_session()
-        plot = self._session.current_plot()
+        pane.set_result(self._result)
+        pane.refresh()
+        plot = self._result.current_plot()
         label = f"Pin:{plot}" if plot else "Pinned"
         idx = self._tabs.addTab(pane, label)
         self._tabs.setCurrentIndex(idx)
@@ -790,13 +790,13 @@ class PlotLab(QWidget):
     # Public API (delegated to live pane)
     # ------------------------------------------------------------------
 
-    def set_session(self, session) -> None:
-        self._session = session
-        self._live_pane.set_session(session)
+    def set_result(self, result) -> None:
+        self._result = result
+        self._live_pane.set_result(result)
 
     @Slot()
-    def refresh_from_session(self) -> None:
-        self._live_pane.refresh_from_session()
+    def refresh(self) -> None:
+        self._live_pane.refresh()
 
     @Slot(object)
     def on_init_data(self, event) -> None:
@@ -811,7 +811,7 @@ class PlotLab(QWidget):
 
     def add_probe(self, net_name: str) -> None:
         """Add a net from schematic probe to the live pane's checked set."""
-        plot = self._session.current_plot() if self._session else None
+        plot = self._result.current_plot() if self._result else None
         if not plot:
             return
         key = (plot, f"v({net_name})")

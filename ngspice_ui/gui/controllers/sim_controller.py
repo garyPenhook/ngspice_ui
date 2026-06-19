@@ -36,11 +36,26 @@ class SimController(QObject):
     plot_init = Signal(object)    # InitDataEvent — emitted when a new sim begins
     plot_data = Signal(object)    # list[DataPointEvent] — batched per drain cycle
     errors_changed = Signal(list) # list[tuple[int, str]] — (1-based lineno, msg)
+    mc_progress = Signal(int, int)  # (1-based run index, total runs)
+    mc_finished = Signal(int)       # total runs completed
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        session: NgSpiceSession | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._session = NgSpiceSession()
+        # session is injectable for tests; production constructs the real one.
+        self._session = session if session is not None else NgSpiceSession()
         self._pending_errors: list[tuple[int, str]] = []
+
+        # Monte Carlo sequencing state (sequential bg_run driven by sim_finished)
+        self._mc_queue: list[str] = []
+        self._mc_total = 0
+        self._mc_index = 0
+        self._mc_analysis_line: str | None = None
+        self._mc_connected = False
+
         self._drain_timer = QTimer(self)
         self._drain_timer.setInterval(50)
         self._drain_timer.timeout.connect(self._drain_queue)
@@ -125,6 +140,66 @@ class SimController(QObject):
             self._session.bg_resume()
         except RuntimeError as exc:
             self.output_line.emit(f"resume error: {exc}")
+
+    # ------------------------------------------------------------------
+    # Parametric sweep
+    # ------------------------------------------------------------------
+
+    def run_param_sweep(
+        self,
+        netlist: str,
+        step_lines: list[str],
+        analysis_line: str | None,
+    ) -> None:
+        """Prepend *step_lines* to *netlist* and run a single swept simulation."""
+        prefix = "\n".join(step_lines)
+        combined = prefix + "\n" + netlist if prefix else netlist
+        self.run_with_analysis(combined, analysis_line)
+
+    # ------------------------------------------------------------------
+    # Monte Carlo (sequential bg_run, advanced by sim_finished)
+    # ------------------------------------------------------------------
+
+    def run_monte_carlo(
+        self,
+        netlists: list[str],
+        analysis_line: str | None,
+    ) -> None:
+        """Run *netlists* one after another, each as its own bg_run.
+
+        Emits ``mc_progress(index, total)`` before each run and
+        ``mc_finished(total)`` once the queue drains. A no-op for an empty list.
+        """
+        if not netlists:
+            return
+        self._mc_queue = list(netlists)
+        self._mc_total = len(netlists)
+        self._mc_index = 0
+        self._mc_analysis_line = analysis_line
+        if not self._mc_connected:
+            self.sim_finished.connect(self._mc_on_finished)
+            self._mc_connected = True
+        self._mc_run_next()
+
+    def _mc_run_next(self) -> None:
+        if not self._mc_queue:
+            return
+        text = self._mc_queue.pop(0)
+        self._mc_index += 1
+        self.mc_progress.emit(self._mc_index, self._mc_total)
+        self.run_with_analysis(text, self._mc_analysis_line)
+
+    @Slot()
+    def _mc_on_finished(self) -> None:
+        # Only react while a Monte Carlo sequence is active.
+        if not self._mc_connected:
+            return
+        if self._mc_queue:
+            self._mc_run_next()
+        else:
+            self.sim_finished.disconnect(self._mc_on_finished)
+            self._mc_connected = False
+            self.mc_finished.emit(self._mc_total)
 
     _MAX_DATA_EVENTS_PER_DRAIN = 200
 

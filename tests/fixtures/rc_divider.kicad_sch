@@ -1,0 +1,28 @@
+(kicad_sch (version 20230121) (generator test)
+  (lib_symbols
+    (symbol "Device:R"
+      (symbol "R_1_1"
+        (pin passive line (at 0 2.54 270) (length 1.27)
+          (number "1" (effects (font (size 1 1)))))
+        (pin passive line (at 0 -2.54 90) (length 1.27)
+          (number "2" (effects (font (size 1 1)))))
+      )
+    )
+  )
+
+  (wire (pts (xy 100 97.46) (xy 100 92.54)))
+
+  (label "in" (at 100 102.54 0))
+  (label "mid" (at 100 97.46 0))
+  (label "GND" (at 100 87.46 0))
+
+  (symbol (lib_id "Device:R") (at 100 100 0) (unit 1)
+    (property "Reference" "R1" (at 102 100 0))
+    (property "Value" "1k" (at 102 100 0))
+  )
+
+  (symbol (lib_id "Device:R") (at 100 90 0) (unit 1)
+    (property "Reference" "R2" (at 102 90 0))
+    (property "Value" "2k" (at 102 90 0))
+  )
+)
