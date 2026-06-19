@@ -426,6 +426,8 @@ class MainWindow(QMainWindow):
         ctrl.plot_init.connect(self._plot.on_init_data)
         ctrl.plot_data.connect(self._plot.on_data_points)
         ctrl.errors_changed.connect(self._editor.mark_errors)
+        ctrl.mc_progress.connect(self._on_mc_progress)
+        ctrl.mc_finished.connect(self._on_mc_finished)
 
         self._editor.modification_changed.connect(self._on_editor_modified)
 
@@ -750,46 +752,28 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Param Sweep", "No netlist loaded.")
             return
         step_lines = self._param_sweep.get_step_lines()
-        prefix = "\n".join(step_lines)
-        combined = prefix + "\n" + text if prefix else text
         analysis_line = self._analysis_panel.get_netlist_line()
-        self._controller.run_with_analysis(combined, analysis_line)
+        self._controller.run_param_sweep(text, step_lines, analysis_line)
 
     # ------------------------------------------------------------------
-    # Monte Carlo (sequential bg_run via queued timer)
+    # Monte Carlo — sequencing lives in the coordinator; we only echo status
     # ------------------------------------------------------------------
 
     @Slot(list)
     def _run_monte_carlo(self, netlists: list) -> None:
         if not netlists:
             return
-        self._mc_queue = list(netlists)
-        self._mc_total = len(netlists)
-        self._mc_index = 0
         analysis_line = self._analysis_panel.get_netlist_line()
-        self._mc_analysis_line = analysis_line
         self._console.append_line(f"Monte Carlo: {len(netlists)} runs queued")
-        self._controller.sim_finished.connect(self._mc_next_run)
-        self._mc_run_next()
+        self._controller.run_monte_carlo(netlists, analysis_line)
 
-    def _mc_run_next(self) -> None:
-        if not hasattr(self, "_mc_queue") or not self._mc_queue:
-            return
-        text = self._mc_queue.pop(0)
-        self._mc_index += 1
-        self._console.append_line(f"  MC run {self._mc_index}/{self._mc_total}")
-        self._controller.run_with_analysis(text, self._mc_analysis_line)
+    @Slot(int, int)
+    def _on_mc_progress(self, index: int, total: int) -> None:
+        self._console.append_line(f"  MC run {index}/{total}")
 
-    @Slot()
-    def _mc_next_run(self) -> None:
-        if not hasattr(self, "_mc_queue"):
-            return
-        if self._mc_queue:
-            self._mc_run_next()
-        else:
-            self._controller.sim_finished.disconnect(self._mc_next_run)
-            self._console.append_line(f"Monte Carlo complete ({self._mc_total} runs)")
-            self._mc_queue = []
+    @Slot(int)
+    def _on_mc_finished(self, total: int) -> None:
+        self._console.append_line(f"Monte Carlo complete ({total} runs)")
 
     # ------------------------------------------------------------------
     # Theme
