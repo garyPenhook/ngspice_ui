@@ -25,6 +25,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...schematic.kicad.sexpr import atom as _atom
+from ...schematic.kicad.sexpr import find as _find
+from ...schematic.kicad.sexpr import find_all as _find_all
+from ...schematic.kicad.sexpr import parse_sexp as _parse_sexp
+from ...schematic.kicad.sexpr import prop as _prop
+
 # ---------------------------------------------------------------------------
 # Colors  (KiCad-inspired dark scheme)
 # ---------------------------------------------------------------------------
@@ -173,88 +179,6 @@ def _build_net_connectivity(sch: _Schematic) -> None:
         key = (_snap(lbl.x), _snap(lbl.y))
         for wire_idx in endpoint_map.get(key, []):
             sch.net_names[find(wire_idx)] = lbl.text
-
-
-# ---------------------------------------------------------------------------
-# Minimal S-expression parser (duplicated from kicad_import to stay standalone)
-# ---------------------------------------------------------------------------
-
-def _parse_sexp(text: str) -> list:
-    pos = 0
-    n = len(text)
-
-    def skip_ws():
-        nonlocal pos
-        while pos < n and text[pos] in ' \t\n\r':
-            pos += 1
-
-    def read_node():
-        nonlocal pos
-        skip_ws()
-        if pos >= n:
-            return None
-        c = text[pos]
-        if c == '(':
-            pos += 1
-            children = []
-            while True:
-                skip_ws()
-                if pos >= n or text[pos] == ')':
-                    if pos < n:
-                        pos += 1
-                    break
-                child = read_node()
-                if child is not None:
-                    children.append(child)
-            return children
-        elif c == '"':
-            pos += 1
-            parts: list[str] = []
-            while pos < n and text[pos] != '"':
-                if text[pos] == '\\':
-                    pos += 1
-                    if pos < n:
-                        parts.append(text[pos])
-                else:
-                    parts.append(text[pos])
-                pos += 1
-            if pos < n:
-                pos += 1
-            return ''.join(parts)
-        else:
-            start = pos
-            while pos < n and text[pos] not in ' \t\n\r()':
-                pos += 1
-            return text[start:pos]
-
-    skip_ws()
-    return read_node() or []
-
-
-def _find(node: list, tag: str):
-    for item in node:
-        if isinstance(item, list) and item and item[0] == tag:
-            return item
-    return None
-
-
-def _find_all(node: list, tag: str) -> list:
-    return [item for item in node if isinstance(item, list) and item and item[0] == tag]
-
-
-def _atom(node: list, idx: int, default: str = '') -> str:
-    try:
-        v = node[idx]
-        return v if isinstance(v, str) else default
-    except IndexError:
-        return default
-
-
-def _prop(sym: list, name: str) -> str:
-    for p in _find_all(sym, 'property'):
-        if _atom(p, 1) == name:
-            return _atom(p, 2)
-    return ''
 
 
 # ---------------------------------------------------------------------------

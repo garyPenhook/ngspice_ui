@@ -26,7 +26,12 @@ import math
 import os
 import re
 from pathlib import Path
-from typing import Optional
+
+from .kicad.sexpr import atom as _atom
+from .kicad.sexpr import find as _find
+from .kicad.sexpr import find_all as _find_all
+from .kicad.sexpr import parse_sexp as _parse_sexp
+from .kicad.sexpr import prop as _prop
 
 # ---------------------------------------------------------------------------
 # Net name sanitisation
@@ -133,92 +138,8 @@ def _resolve_lib_path(raw: str, sch_dir: Path) -> tuple[Path | None, str]:
 
 
 # ---------------------------------------------------------------------------
-# Minimal S-expression parser
+# S-expression navigation (parser + helpers live in .kicad.sexpr)
 # ---------------------------------------------------------------------------
-
-def _parse_sexp(text: str) -> list:
-    """Tokenise and parse a KiCad S-expression into nested Python lists."""
-    pos = 0
-    n = len(text)
-
-    def skip_ws() -> None:
-        nonlocal pos
-        while pos < n and text[pos] in ' \t\n\r':
-            pos += 1
-
-    def read_node():
-        nonlocal pos
-        skip_ws()
-        if pos >= n:
-            return None
-        c = text[pos]
-        if c == '(':
-            pos += 1
-            children = []
-            while True:
-                skip_ws()
-                if pos >= n or text[pos] == ')':
-                    if pos < n:
-                        pos += 1
-                    break
-                child = read_node()
-                if child is not None:
-                    children.append(child)
-            return children
-        elif c == '"':
-            pos += 1
-            parts: list[str] = []
-            while pos < n and text[pos] != '"':
-                if text[pos] == '\\':
-                    pos += 1
-                    if pos < n:
-                        parts.append(text[pos])
-                else:
-                    parts.append(text[pos])
-                pos += 1
-            if pos < n:
-                pos += 1  # closing "
-            return ''.join(parts)
-        else:
-            start = pos
-            while pos < n and text[pos] not in ' \t\n\r()':
-                pos += 1
-            return text[start:pos]
-
-    skip_ws()
-    return read_node() or []
-
-
-# ---------------------------------------------------------------------------
-# S-expression navigation
-# ---------------------------------------------------------------------------
-
-def _find(node: list, tag: str) -> Optional[list]:
-    for item in node:
-        if isinstance(item, list) and item and item[0] == tag:
-            return item
-    return None
-
-
-def _find_all(node: list, tag: str) -> list[list]:
-    return [item for item in node if isinstance(item, list) and item and item[0] == tag]
-
-
-def _atom(node: list, idx: int, default: str = '') -> str:
-    try:
-        v = node[idx]
-        return v if isinstance(v, str) else default
-    except IndexError:
-        return default
-
-
-def _prop(sym: list, name: str) -> str:
-    """Get a KiCad property value by name."""
-    for p in _find_all(sym, 'property'):
-        if _atom(p, 1) == name:
-            return _atom(p, 2)
-    return ''
-
 
 def _unit_of(sym: list) -> int:
     n = _find(sym, 'unit')
