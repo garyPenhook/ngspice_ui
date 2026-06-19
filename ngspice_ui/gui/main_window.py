@@ -390,6 +390,14 @@ class MainWindow(MainWindowUI, QMainWindow):
 
     @Slot()
     def _do_plot(self) -> None:
+        if self._controller.session.is_running:
+            # A background run is streaming into the live pane. Snapshotting now
+            # would enumerate vectors while ngspice is still creating/resizing
+            # them (from_session holds the realloc lock only per vector, not
+            # across the whole walk), risking a partial result. The live stream
+            # already updates the plot; the post-run snapshot handles the rest.
+            self._console.append_line("-- simulation running; plot updates live --")
+            return
         plot_name = self._controller.session.current_plot()
         if not plot_name or plot_name == "const":
             self._console.append_line("-- no simulation data to plot --")
