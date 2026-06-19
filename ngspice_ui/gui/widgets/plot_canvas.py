@@ -25,6 +25,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...models.expr import safe_eval as _safe_eval
+from ...models.waveform import compute_fft, compute_group_delay
+
 _SCALE_NAMES = frozenset({"time", "frequency", "v-sweep", "i-sweep", "sweep"})
 _COLORS = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
@@ -361,9 +364,10 @@ class _PlotPane(QWidget):
             raise KeyError(name)
 
         results = []
+        ns = {"__builtins__": {}, "np": np, "vec": _vec}
         for label, expr in self._derived:
             try:
-                y = eval(expr, {"__builtins__": {}, "np": np, "vec": _vec})  # noqa: S307
+                y = _safe_eval(expr, ns)
                 results.append((label, np.asarray(y, dtype=float)))
             except Exception:
                 results.append((label, np.array([])))
@@ -489,9 +493,7 @@ class _PlotPane(QWidget):
                 phase_deg = np.unwrap(np.angle(y, deg=False)) * 180.0 / np.pi
                 self._ax.plot(x, mag_db, label=f"|{label}| dB", color=color)
                 if show_grpdelay:
-                    phase_rad = np.unwrap(np.angle(y))
-                    omega = 2 * np.pi * x
-                    grp = -np.gradient(phase_rad, omega)
+                    grp = compute_group_delay(x, y)
                     ax2.plot(x, grp, label=f"τ {label} s", color=color,
                              linestyle=":", alpha=0.7)
                     ax2.set_ylabel("Group delay (s)")
@@ -528,22 +530,14 @@ class _PlotPane(QWidget):
     def _plot_fft(self, traces: list) -> None:
         self._ax.set_title("FFT Spectrum")
         for i, (plot_name, vec_name, x, y, _) in enumerate(traces):
-            color = _COLORS[i % len(_COLORS)]
-            data = y.real
-            n = len(data)
-            if n < 4 or x is None or len(x) != n:
+            if x is None or len(x) != len(y) or len(x) < 4:
                 continue
-            # ngspice transient uses adaptive step → resample to uniform grid
-            # before FFT so frequency bins are correct
-            t0, t1 = x[0], x[-1]
-            n_uniform = n
-            t_uniform = np.linspace(t0, t1, n_uniform)
-            data_uniform = np.interp(t_uniform, x, data)
-            dt = (t1 - t0) / (n_uniform - 1)
-            freqs = np.fft.rfftfreq(n_uniform, d=dt)
-            spectrum = np.fft.rfft(data_uniform)
-            mag_db = 20 * np.log10(np.abs(spectrum) / n_uniform + 1e-300)
-            self._ax.plot(freqs[1:], mag_db[1:], label=vec_name, color=color)
+            color = _COLORS[i % len(_COLORS)]
+            try:
+                freqs, mag_db = compute_fft(x, y.real)
+            except ValueError:
+                continue
+            self._ax.plot(freqs, mag_db, label=vec_name, color=color)
         self._ax.set_xscale("log")
         self._ax.set_xlabel("Frequency (Hz)")
         self._ax.set_ylabel("Magnitude (dB)")

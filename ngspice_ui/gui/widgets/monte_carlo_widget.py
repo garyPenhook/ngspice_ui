@@ -1,9 +1,6 @@
 """Monte Carlo analysis widget — run N simulations with randomised component values."""
 from __future__ import annotations
 
-import re
-
-import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -19,25 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# Matches component value tokens we can randomise
-_VAL_RE = re.compile(
-    r'(\b\w+\b\s+\w+\s+\w+\s+)(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:MEG|[kKmMuUnNpPfFgGtT])?)',
-    re.IGNORECASE,
-)
-
-
-def _parse_spice_val(s: str) -> float:
-    """Convert SPICE value string to float."""
-    s = s.strip()
-    suffix_map = {
-        'T': 1e12, 'G': 1e9, 'MEG': 1e6, 'K': 1e3, 'k': 1e3,
-        'm': 1e-3, 'u': 1e-6, 'U': 1e-6, 'n': 1e-9, 'N': 1e-9,
-        'p': 1e-12, 'P': 1e-12, 'f': 1e-15, 'F': 1e-15,
-    }
-    for sfx in ('MEG', 'T', 'G', 'K', 'k', 'm', 'u', 'U', 'n', 'N', 'p', 'P', 'f', 'F'):
-        if s.upper().endswith(sfx.upper()):
-            return float(s[:-len(sfx)]) * suffix_map.get(sfx, 1.0)
-    return float(s)
+from ...models.monte_carlo import generate_netlists
+from ...models.monte_carlo import parse_spice_val as _parse_spice_val
 
 
 class MonteCarloWidget(QWidget):
@@ -149,17 +129,6 @@ class MonteCarloWidget(QWidget):
                     pass
         self._status.setText(f"Found {found} component(s)")
 
-    def _vary(self, nominal_str: str, pct: float, dist: str) -> float:
-        try:
-            nom = _parse_spice_val(nominal_str)
-        except ValueError:
-            return 0.0
-        rel = pct / 100.0
-        if dist == "Gaussian":
-            return nom * (1 + np.random.normal(0, rel / 3))
-        else:
-            return nom * (1 + np.random.uniform(-rel, rel))
-
     def _emit_mc(self) -> None:
         try:
             n_runs = int(self._runs_edit.text())
@@ -182,21 +151,11 @@ class MonteCarloWidget(QWidget):
             if comp and nom:
                 variations.append((comp, nom, pct, dist))
 
-        netlists = []
         base = self._netlist_getter() if self._netlist_getter else self._netlist
         if not base:
             self._status.setText("No netlist — load or run a simulation first.")
             return
-        for _ in range(n_runs):
-            text = base
-            for comp, nom, pct, dist in variations:
-                new_val = self._vary(nom, pct, dist)
-                text = re.sub(
-                    rf'(?m)^(\s*{re.escape(comp)}\s+\S+\s+\S+\s+)\S+',
-                    lambda m, v=new_val: m.group(1) + f"{v:.6g}",
-                    text, count=1,
-                )
-            netlists.append(text)
 
+        netlists = generate_netlists(base, variations, n_runs)
         self._status.setText(f"Running {n_runs} simulations…")
         self.run_mc.emit(netlists)

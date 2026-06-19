@@ -139,6 +139,7 @@ class MainWindow(MainWindowUI, QMainWindow):
             return
         self._editor.set_content("", path=None)
         self._current_project_path = None
+        self._project_dirty = False
         self._update_title()
 
     @Slot()
@@ -677,9 +678,16 @@ class MainWindow(MainWindowUI, QMainWindow):
                 event.ignore()
                 return
             if ret == QMessageBox.StandardButton.Save:
-                self._save_netlist()
+                if self._current_project_path:
+                    # One call clears both editor and project dirty state.
+                    self._write_project(self._current_project_path)
+                else:
+                    if self._editor.is_modified:
+                        self._save_netlist()   # may open Save As dialog
+                    if self._project_dirty:
+                        self._save_project()   # opens Save Project dialog
                 if self._editor.is_modified or self._project_dirty:
-                    event.ignore()
+                    event.ignore()             # user cancelled a dialog
                     return
         self._save_geometry()
         super().closeEvent(event)
