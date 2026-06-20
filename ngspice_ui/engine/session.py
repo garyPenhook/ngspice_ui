@@ -247,22 +247,32 @@ class NgSpiceSession:
         """
         from .bindings import CB_GetISRCData, CB_GetSyncData, CB_GetVSRCData
 
+        # Registering/clearing sync callbacks swaps raw C function pointers that
+        # the background thread invokes. Halt any running simulation first so we
+        # never race it — same invariant load_netlist relies on.
+        self._safe_halt()
+
         def _vsrc(voltage_ptr, time, srcname, srcindex, userdata):
+            # Always write a defined value: ngspice uses voltage_ptr[0] whether
+            # or not we set it, so leaving it untouched on error feeds the solver
+            # a stale/garbage voltage.
+            voltage_ptr[0] = 0.0
             if vsrc_fn is not None:
                 try:
                     name = srcname.decode("utf-8") if srcname else ""
                     voltage_ptr[0] = float(vsrc_fn(float(time), name))
                 except Exception:
-                    pass
+                    voltage_ptr[0] = 0.0
             return 0
 
         def _isrc(current_ptr, time, srcname, srcindex, userdata):
+            current_ptr[0] = 0.0
             if isrc_fn is not None:
                 try:
                     name = srcname.decode("utf-8") if srcname else ""
                     current_ptr[0] = float(isrc_fn(float(time), name))
                 except Exception:
-                    pass
+                    current_ptr[0] = 0.0
             return 0
 
         def _sync(actual_time, delta_ptr, old_delta, index, is_diff, nm, userdata):

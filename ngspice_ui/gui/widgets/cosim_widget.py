@@ -51,11 +51,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...models.expr import validate_expr as _validate_expr
+
 _EXPR_SCOPE = {"__builtins__": {}, "math": math, "np": np, "abs": abs, "float": float}
+
+# Names bound when a co-sim expression runs: the callback parameters plus the
+# math/numpy modules already present in _EXPR_SCOPE.
+_COSIM_NAMES = frozenset({"t", "name", "old_delta"})
 
 
 def _compile_expr(expr: str, label: str):
-    """Compile a user expression into a lambda(t, name) → float."""
+    """Compile a user expression into a lambda(t, name) → float.
+
+    The expression is first validated against the shared AST allowlist
+    (numeric/numpy/math only). ``eval`` with empty builtins is *not* a security
+    boundary on its own, so the validation pass is what blocks attribute
+    escapes, imports, and arbitrary calls.
+    """
+    try:
+        _validate_expr(expr, _COSIM_NAMES)
+    except (ValueError, SyntaxError) as exc:
+        raise ValueError(f"{label}: {exc}") from exc
     src = f"lambda t, name, math=math, np=np: ({expr})"
     try:
         return eval(src, _EXPR_SCOPE)  # noqa: S307
@@ -251,25 +267,20 @@ class CoSimWidget(QWidget):
         sync_fn = None
         sync_expr = self._sync_edit.text().strip()
         if sync_expr:
+            # sync receives (t, old_delta); validate then compile with that
+            # exact signature (no name-substitution tricks).
             try:
-                _raw = _compile_expr(sync_expr.replace("old_delta", "name"), "sync")
+                _validate_expr(sync_expr, frozenset({"t", "old_delta"}))
+                _sf = eval(  # noqa: S307
+                    f"lambda t, old_delta, math=math, np=np: ({sync_expr})", _EXPR_SCOPE
+                )
+            except (ValueError, SyntaxError) as exc:
+                self._status.setText(f"sync: {exc}")
+                return
 
-                # sync receives (t, old_delta); reuse lambda(t, name) mapping name→old_delta
-                def sync_fn(t, old_delta, _raw=_raw):
-                    result = _raw(t, old_delta)
-                    return float(result) if result is not None else None
-            except ValueError:
-                # Retry with correct signature lambda(t, old_delta)
-                try:
-                    src = f"lambda t, old_delta, math=math, np=np: ({sync_expr})"
-                    _sf = eval(src, _EXPR_SCOPE)  # noqa: S307
-
-                    def sync_fn(t, old_delta, _sf=_sf):
-                        result = _sf(t, old_delta)
-                        return float(result) if result is not None else None
-                except SyntaxError as exc2:
-                    self._status.setText(f"sync: {exc2}")
-                    return
+            def sync_fn(t, old_delta, _sf=_sf):
+                result = _sf(t, old_delta)
+                return float(result) if result is not None else None
 
         try:
             self._session.init_sync(vsrc_fn, isrc_fn, sync_fn)
@@ -283,6 +294,15 @@ class CoSimWidget(QWidget):
             self._status.setText("Co-sim active — " + ("  ".join(parts) or "no-op"))
         except Exception as exc:
             self._status.setText(f"init_sync failed: {exc}")
+
+    def _clear_live_callbacks(self) -> None:
+        """Unregister any callbacks currently installed in the engine (quietly)."""
+        if self._session is None:
+            return
+        try:
+            self._session.init_sync(None, None, None)
+        except Exception:
+            pass
 
     def _disable(self) -> None:
         if self._session is None:
@@ -362,9 +382,24 @@ class CoSimWidget(QWidget):
         }
 
     def set_config(self, cfg: dict) -> None:
+        if not isinstance(cfg, dict):
+            cfg = {}
+        # Replacing the config invalidates any callbacks a previous project
+        # registered with the engine. Unregister them so an old project's source
+        # functions can't silently keep driving a newly loaded circuit.
+        self._clear_live_callbacks()
         while self._table.rowCount() > 0:
             self._table.removeRow(0)
-        for rd in cfg.get("rows", []):
+
+        def _str(v) -> str:
+            return v if isinstance(v, str) else ""
+
+        rows = cfg.get("rows", [])
+        if not isinstance(rows, list):
+            rows = []
+        for rd in rows:
+            if not isinstance(rd, dict):
+                continue
             self._add_row()
             r = self._table.rowCount() - 1
             chk = self._table.item(r, 0)
@@ -374,13 +409,14 @@ class CoSimWidget(QWidget):
                 )
             name_item = self._table.item(r, 1)
             if name_item:
-                name_item.setText(rd.get("name", ""))
+                name_item.setText(_str(rd.get("name", "")))
             cmb = self._table.cellWidget(r, 2)
             if cmb:
-                idx = cmb.findText(rd.get("type", "V"))
+                idx = cmb.findText(_str(rd.get("type", "V")) or "V")
                 if idx >= 0:
                     cmb.setCurrentIndex(idx)
             expr_item = self._table.item(r, 3)
             if expr_item:
-                expr_item.setText(rd.get("expr", ""))
-        self._sync_edit.setText(cfg.get("sync", ""))
+                expr_item.setText(_str(rd.get("expr", "")))
+        self._sync_edit.setText(_str(cfg.get("sync", "")))
+        self._status.setText("Co-sim: not registered")

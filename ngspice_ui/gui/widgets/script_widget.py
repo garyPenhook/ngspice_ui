@@ -209,4 +209,7 @@ class ScriptWidget(QWidget):
         return {"input": self._inp.toPlainText()}
 
     def set_config(self, cfg: dict) -> None:
-        self._inp.setPlainText(cfg.get("input", ""))
+        if not isinstance(cfg, dict):
+            cfg = {}
+        val = cfg.get("input", "")
+        self._inp.setPlainText(val if isinstance(val, str) else "")

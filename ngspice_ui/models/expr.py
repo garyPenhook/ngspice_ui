@@ -177,9 +177,9 @@ _SAFE_NODES = (
 )
 
 
-def _validate(node: ast.AST) -> None:
+def _validate(node: ast.AST, allowed: frozenset[str]) -> None:
     if isinstance(node, ast.Name):
-        if node.id not in _WHITELISTED_NAMES:
+        if node.id not in allowed:
             raise ValueError(f"name not allowed: {node.id!r}")
     elif isinstance(node, ast.Attribute):
         if node.attr.startswith("_"):
@@ -190,26 +190,37 @@ def _validate(node: ast.AST) -> None:
             raise ValueError(f"attribute access on computed values not allowed: {node.attr!r}")
         if node.value.id == "np" and node.attr not in _SAFE_NP_ATTRS:
             raise ValueError(f"numpy attribute not allowed: {node.attr!r}")
-        _validate(node.value)
+        _validate(node.value, allowed)
     elif isinstance(node, ast.Call):
-        _validate(node.func)
+        _validate(node.func, allowed)
         for arg in node.args:
-            _validate(arg)
+            _validate(arg, allowed)
         for kw in node.keywords:
-            _validate(kw.value)
+            _validate(kw.value, allowed)
     elif isinstance(node, _SAFE_NODES):
         for child in ast.iter_child_nodes(node):
-            _validate(child)
+            _validate(child, allowed)
     else:
         raise ValueError(f"construct not allowed: {type(node).__name__!r}")
 
 
-def safe_eval(expr: str, ns: dict) -> object:
+def validate_expr(expr: str, extra_names: frozenset[str] = frozenset()) -> ast.AST:
+    """Parse *expr* and validate it against the whitelist plus *extra_names*.
+
+    Returns the parsed AST (an :class:`ast.Expression`) so callers can compile
+    it without re-parsing. Raises ValueError for any disallowed construct.
+    """
+    tree = ast.parse(expr, mode="eval")
+    _validate(tree, _WHITELISTED_NAMES | extra_names)
+    return tree
+
+
+def safe_eval(expr: str, ns: dict, extra_names: frozenset[str] = frozenset()) -> object:
     """Parse, validate, then eval *expr* against *ns*.
 
     Raises ValueError for any disallowed construct before eval is called.
     The caller must populate *ns* with all whitelisted names (np, math, vec, …).
+    *extra_names* whitelists additional bound names (e.g. callback parameters).
     """
-    tree = ast.parse(expr, mode="eval")
-    _validate(tree)
+    tree = validate_expr(expr, extra_names)
     return eval(compile(tree, "<expr>", "eval"), ns)  # noqa: S307
