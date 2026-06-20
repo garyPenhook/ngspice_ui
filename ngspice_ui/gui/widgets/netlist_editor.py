@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QRect, QSize, QStringListModel, Qt, Signal
+from PySide6.QtCore import QRect, QRegularExpression, QSize, QStringListModel, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -356,48 +356,47 @@ class _FindBar(QWidget):
             flags |= QTextDocument.FindFlag.FindCaseSensitively
         return flags
 
-    def _pattern(self) -> str | re.Pattern:
+    def _pattern(self):
+        """Return a search pattern: a plain ``str`` (literal), a
+        ``QRegularExpression`` (regex mode), or ``None`` for empty/invalid input.
+
+        Regex mode must use QRegularExpression — passing the regex source as a
+        plain string makes QTextDocument.find treat it as literal text.
+        """
         text = self._find_edit.text()
         if not text:
-            return ""
+            return None
         if self._regex_cb.isChecked():
-            flags = 0 if self._case_cb.isChecked() else re.IGNORECASE
-            try:
-                return re.compile(text, flags)
-            except re.error:
-                return text
+            opts = QRegularExpression.PatternOption.NoPatternOption
+            if not self._case_cb.isChecked():
+                opts |= QRegularExpression.PatternOption.CaseInsensitiveOption
+            qre = QRegularExpression(text, opts)
+            if not qre.isValid():
+                self._status.setText("Invalid regex")
+                return None
+            return qre
         return text
 
     def _find(self, backward: bool = False) -> bool:
         pat = self._pattern()
-        if not pat:
-            self._status.setText("")
+        if pat is None:
             return False
         doc = self._editor.document()
         cursor = self._editor.textCursor()
         from PySide6.QtGui import QTextDocument
 
+        # For a QRegularExpression, case sensitivity is carried by the pattern's
+        # own options; the FindCaseSensitively flag only affects literal search.
         flags = self._flags()
         if backward:
             flags |= QTextDocument.FindFlag.FindBackward
-        if isinstance(pat, re.Pattern):
-            case_flag = (
-                QTextDocument.FindFlag.FindCaseSensitively
-                if self._case_cb.isChecked()
-                else QTextDocument.FindFlag(0)
-            )
-            new_cursor = doc.find(pat.pattern, cursor, case_flag)
-        else:
-            new_cursor = doc.find(pat, cursor, flags)
+        new_cursor = doc.find(pat, cursor, flags)
         if new_cursor.isNull():
-            # wrap
+            # wrap around
             wrap = QTextCursor(doc)
             if backward:
                 wrap.movePosition(QTextCursor.MoveOperation.End)
-            if isinstance(pat, re.Pattern):
-                new_cursor = doc.find(pat.pattern, wrap)
-            else:
-                new_cursor = doc.find(pat, wrap, flags)
+            new_cursor = doc.find(pat, wrap, flags)
         if not new_cursor.isNull():
             self._editor.setTextCursor(new_cursor)
             self._status.setText("")
@@ -419,7 +418,7 @@ class _FindBar(QWidget):
 
     def _replace_all(self) -> None:
         pat = self._pattern()
-        if not pat:
+        if pat is None:
             return
         doc = self._editor.document()
         repl = self._replace_edit.text()
@@ -428,10 +427,7 @@ class _FindBar(QWidget):
         count = 0
         flags = self._flags()
         while True:
-            if isinstance(pat, re.Pattern):
-                c = doc.find(pat.pattern, cursor)
-            else:
-                c = doc.find(pat, cursor, flags)
+            c = doc.find(pat, cursor, flags)
             if c.isNull():
                 break
             c.insertText(repl)
@@ -532,9 +528,30 @@ class NetlistEditor(QWidget):
     def show_find_replace(self) -> None:
         self._find_bar.show_and_focus()
 
+    # Keys that drive the completion popup itself (navigation / accept / cancel)
+    # are handled by QCompleter's own filter on the editor — we must not refresh
+    # the popup for them, or accepting a completion would immediately re-open it.
+    _COMPLETER_NAV_KEYS = frozenset(
+        {
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Enter,
+            Qt.Key.Key_Tab,
+            Qt.Key.Key_Backtab,
+            Qt.Key.Key_Escape,
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+            Qt.Key.Key_PageUp,
+            Qt.Key.Key_PageDown,
+        }
+    )
+
     def eventFilter(self, obj, event) -> bool:
         from PySide6.QtCore import QEvent
 
+        # Key events are delivered to the inner editor (_core), not this wrapper,
+        # so the find shortcut and the completion trigger must live here in the
+        # filter installed on _core — a keyPressEvent override on the wrapper
+        # would never fire.
         if obj is self._core and event.type() == QEvent.Type.KeyPress:
             if event.matches(QKeySequence.StandardKey.Find) or (
                 event.key() == Qt.Key.Key_H
@@ -542,6 +559,10 @@ class NetlistEditor(QWidget):
             ):
                 self._find_bar.show_and_focus()
                 return True
+            if event.key() not in self._COMPLETER_NAV_KEYS:
+                # Refresh the dot-command popup *after* the editor inserts the
+                # character (defer to the next event-loop turn).
+                QTimer.singleShot(0, self._trigger_completer)
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------
@@ -590,19 +611,6 @@ class NetlistEditor(QWidget):
         )
         cursor.insertText(completion)
         self._core.setTextCursor(cursor)
-
-    def keyPressEvent(self, event) -> None:
-        popup = self._completer.popup()
-        if popup.isVisible() and event.key() in (
-            Qt.Key.Key_Return,
-            Qt.Key.Key_Enter,
-            Qt.Key.Key_Tab,
-            Qt.Key.Key_Escape,
-        ):
-            event.ignore()
-            return
-        super().keyPressEvent(event)
-        self._trigger_completer()
 
     # ------------------------------------------------------------------
     # .include resolver

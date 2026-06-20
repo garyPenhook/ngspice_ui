@@ -93,6 +93,7 @@ class _PlotPane(QWidget):
         self._plots_vecs: dict[str, list[str]] = {}
         self._checked: set[tuple[str, str]] = set()
         self._derived: list[tuple[str, str]] = []  # (label, expr)
+        self._derived_disabled: set[str] = set()  # labels unchecked in the tree
 
         self._live_x: list[float] = []
         self._live_y: dict[str, list[float]] = {}
@@ -247,23 +248,37 @@ class _PlotPane(QWidget):
         traces = self._gather_traces()
         if not traces:
             return
+        # Shared x axis from the first trace that carries a scale vector.
+        x = next((t[2] for t in traces if t[2] is not None), None)
+        x_plot = next((t[0] for t in traces if t[2] is not None), "")
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             header = []
-            for plot_name, vec_name, x, y, _ in traces:
-                if not header and x is not None:
-                    header.append(f"x ({plot_name})")
-                header.append(f"{plot_name}.{vec_name}")
+            if x is not None:
+                header.append(f"x ({x_plot})")
+            for plot_name, vec_name, _x, _y, is_complex in traces:
+                col = f"{plot_name}.{vec_name}"
+                if is_complex:
+                    # Complex (AC/Smith) data: keep both components, not just Re.
+                    header.append(f"Re({col})")
+                    header.append(f"Im({col})")
+                else:
+                    header.append(col)
             w.writerow(header)
-            length = max(len(t[3]) for t in traces)
+            length = max((len(t[3]) for t in traces), default=0)
+            if x is not None:
+                length = max(length, len(x))
             for i in range(length):
-                row = []
-                first = True
-                for _, _, x, y, _ in traces:
-                    if first and x is not None:
-                        row.append(x[i] if i < len(x) else "")
-                        first = False
-                    row.append(y.real[i] if i < len(y) else "")
+                row: list = []
+                if x is not None:
+                    row.append(x[i] if i < len(x) else "")
+                for _, _, _x, y, is_complex in traces:
+                    in_range = i < len(y)
+                    if is_complex:
+                        row.append(y.real[i] if in_range else "")
+                        row.append(y.imag[i] if in_range else "")
+                    else:
+                        row.append(y.real[i] if in_range else "")
                 w.writerow(row)
 
     def export_figure(self, path: str) -> None:
@@ -311,7 +326,12 @@ class _PlotPane(QWidget):
             for label, _ in self._derived:
                 di = QTreeWidgetItem([label])
                 di.setData(0, Qt.ItemDataRole.UserRole, ("derived", label))
-                di.setCheckState(0, Qt.CheckState.Checked)
+                di.setCheckState(
+                    0,
+                    Qt.CheckState.Unchecked
+                    if label in self._derived_disabled
+                    else Qt.CheckState.Checked,
+                )
                 derived_item.addChild(di)
             derived_item.setExpanded(True)
 
@@ -321,13 +341,20 @@ class _PlotPane(QWidget):
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
             return
+        checked = item.checkState(0) == Qt.CheckState.Checked
         if data[0] == "vec":
             _, plot_name, vec_name = data
             key = (plot_name, vec_name)
-            if item.checkState(0) == Qt.CheckState.Checked:
+            if checked:
                 self._checked.add(key)
             else:
                 self._checked.discard(key)
+        elif data[0] == "derived":
+            label = data[1]
+            if checked:
+                self._derived_disabled.discard(label)
+            else:
+                self._derived_disabled.add(label)
         self._replot()
 
     # ------------------------------------------------------------------
@@ -377,6 +404,8 @@ class _PlotPane(QWidget):
         results = []
         ns = {"__builtins__": {}, "np": np, "vec": _vec}
         for label, expr in self._derived:
+            if label in self._derived_disabled:
+                continue  # trace unchecked in the tree
             try:
                 y = _safe_eval(expr, ns)
                 results.append((label, np.asarray(y, dtype=float)))

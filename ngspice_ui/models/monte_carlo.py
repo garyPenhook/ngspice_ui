@@ -36,6 +36,24 @@ _SUFFIX_MAP: dict[str, float] = {
 }
 
 
+def insert_before_end(netlist: str, *directives: str) -> str:
+    """Return *netlist* with *directives* inserted just before the first ``.end``.
+
+    Appending after ``.end`` is fragile (``.end`` terminates the deck for most
+    analyses), so swept directives like ``.param``/``.temp`` are placed before
+    it — and after any of the base netlist's own definitions, so they override
+    by ngspice's last-assignment-wins rule. If there is no ``.end``, the
+    directives are appended.
+    """
+    if not directives:
+        return netlist
+    lines = netlist.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.strip().lower() == ".end":
+            return "\n".join([*lines[:i], *directives, *lines[i:]])
+    return "\n".join([*lines, *directives])
+
+
 def parse_spice_val(s: str) -> float:
     """Convert a SPICE value string to float.
 

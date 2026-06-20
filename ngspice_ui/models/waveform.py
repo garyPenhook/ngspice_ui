@@ -22,7 +22,9 @@ def compute_fft(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     if n < 4 or len(y) != n:
         raise ValueError("FFT requires at least 4 matched samples")
     t0, t1 = float(x[0]), float(x[-1])
-    if t1 <= t0:
+    # np.interp silently produces garbage for a non-monotonic xp, so verify the
+    # whole axis is strictly increasing — not just the endpoints.
+    if not np.all(np.diff(x) > 0):
         raise ValueError("Time axis must be strictly increasing")
     t_uniform = np.linspace(t0, t1, n)
     y_uniform = np.interp(t_uniform, x, y)

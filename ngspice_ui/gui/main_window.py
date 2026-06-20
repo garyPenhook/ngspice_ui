@@ -107,8 +107,8 @@ class MainWindow(MainWindowUI, QMainWindow):
         ctrl.plot_init.connect(self._plot.on_init_data)
         ctrl.plot_data.connect(self._plot.on_data_points)
         ctrl.errors_changed.connect(self._editor.mark_errors)
-        ctrl.mc_progress.connect(self._on_mc_progress)
-        ctrl.mc_finished.connect(self._on_mc_finished)
+        ctrl.sequence_progress.connect(self._on_sequence_progress)
+        ctrl.sequence_finished.connect(self._on_sequence_finished)
 
         self._editor.modification_changed.connect(self._on_editor_modified)
 
@@ -133,17 +133,26 @@ class MainWindow(MainWindowUI, QMainWindow):
     # File: new / open
     # ------------------------------------------------------------------
 
-    @Slot()
-    def _new_file(self) -> None:
-        if not self._confirm_discard():
-            return
+    def _reset_project_state(self) -> None:
+        """Reset all project widgets to empty defaults.
+
+        Applying the empty co-sim config also unregisters any live co-sim
+        callbacks, so a previous project's source functions cannot leak into the
+        circuit that's about to be loaded.
+        """
         empty = ProjectDocument()
-        self._editor.set_content("", path=None)
         self._analysis_panel.set_config(empty.analysis)
         self._measurements.set_config(empty.measurements)
         self._notes.set_config(empty.notes)
         self._script.set_config(empty.script)
         self._cosim.set_config(empty.cosim)
+
+    @Slot()
+    def _new_file(self) -> None:
+        if not self._confirm_discard():
+            return
+        self._editor.set_content("", path=None)
+        self._reset_project_state()
         self._current_project_path = None
         self._project_dirty = False
         self._update_title()
@@ -172,11 +181,16 @@ class MainWindow(MainWindowUI, QMainWindow):
 
     def _open_path(self, p: Path) -> None:
         suffix = p.suffix.lower()
+        # Opening any standalone circuit starts a fresh project context — the
+        # previous project's analysis/measurements/script/co-sim must not carry
+        # over (and stale co-sim callbacks must be unregistered). Reset only
+        # once the load actually succeeds, so a failed open leaves state intact.
         if suffix == ".kicad_sch":
             try:
                 from ..schematic import import_schematic
 
                 lines = import_schematic(p)
+                self._reset_project_state()
                 self._editor.set_content("\n".join(lines), path=None)
                 self._current_project_path = None
                 self._project_dirty = True  # imported netlist has never been saved
@@ -193,6 +207,7 @@ class MainWindow(MainWindowUI, QMainWindow):
                 from ..schematic import import_schematic
 
                 lines = import_schematic(p)
+                self._reset_project_state()
                 self._editor.set_content("\n".join(lines), path=None)
                 self._current_project_path = None
                 self._project_dirty = True  # imported netlist has never been saved
@@ -210,6 +225,7 @@ class MainWindow(MainWindowUI, QMainWindow):
             except OSError as exc:
                 QMessageBox.critical(self, "Open Error", str(exc))
                 return
+            self._reset_project_state()
             self._editor.set_content(text, path=p)
             self._current_project_path = None
         self._add_to_recent(str(p))
@@ -378,9 +394,18 @@ class MainWindow(MainWindowUI, QMainWindow):
             return
         self._sim_halted = False
         analysis_line = self._analysis_panel.get_netlist_line()
-        temp_lines = self._analysis_panel.get_temperature_lines()
+        temps = self._analysis_panel.get_temperatures()
         self._monte_carlo.set_netlist(text)
-        self._controller.run_with_analysis(text, analysis_line, extra_lines=temp_lines)
+        if len(temps) > 1:
+            # ngspice 46 has no working .step temp; run one pass per temperature.
+            from ..models.monte_carlo import insert_before_end
+
+            netlists = [insert_before_end(text, f".temp {t}") for t in temps]
+            self._console.append_line(f"Temperature sweep: {len(temps)} runs queued")
+            self._controller.run_sequence(netlists, analysis_line, kind="Temp sweep")
+        else:
+            extra = [f".temp {temps[0]}"] if temps else None
+            self._controller.run_with_analysis(text, analysis_line, extra_lines=extra)
 
     @Slot()
     def _stop(self) -> None:
@@ -471,9 +496,13 @@ class MainWindow(MainWindowUI, QMainWindow):
         if not text:
             QMessageBox.warning(self, "Param Sweep", "No netlist loaded.")
             return
-        step_lines = self._param_sweep.get_step_lines()
+        netlists = self._param_sweep.build_netlists(text)
+        if not netlists:
+            QMessageBox.warning(self, "Param Sweep", "Nothing to sweep — check the values.")
+            return
         analysis_line = self._analysis_panel.get_netlist_line()
-        self._controller.run_param_sweep(text, step_lines, analysis_line)
+        self._console.append_line(f"Parametric sweep: {len(netlists)} runs queued")
+        self._controller.run_param_sweep(netlists, analysis_line)
 
     # ------------------------------------------------------------------
     # Monte Carlo — sequencing lives in the coordinator; we only echo status
@@ -487,13 +516,13 @@ class MainWindow(MainWindowUI, QMainWindow):
         self._console.append_line(f"Monte Carlo: {len(netlists)} runs queued")
         self._controller.run_monte_carlo(netlists, analysis_line)
 
-    @Slot(int, int)
-    def _on_mc_progress(self, index: int, total: int) -> None:
-        self._console.append_line(f"  MC run {index}/{total}")
+    @Slot(int, int, str)
+    def _on_sequence_progress(self, index: int, total: int, kind: str) -> None:
+        self._console.append_line(f"  {kind} run {index}/{total}")
 
-    @Slot(int)
-    def _on_mc_finished(self, total: int) -> None:
-        self._console.append_line(f"Monte Carlo complete ({total} runs)")
+    @Slot(int, str)
+    def _on_sequence_finished(self, total: int, kind: str) -> None:
+        self._console.append_line(f"{kind} complete ({total} runs)")
 
     # ------------------------------------------------------------------
     # Theme
@@ -608,6 +637,17 @@ class MainWindow(MainWindowUI, QMainWindow):
         else:
             self._act_resume.setEnabled(False)
             self._set_status(f"Done  ({elapsed:.2f} s)")
+
+        # A run can report a fatal error through ngspice's callbacks while the
+        # background thread still 'finishes'. In that case current_plot() still
+        # points at the *previous* run's data, so snapshotting now would present
+        # stale results as though they were this run's. Bail out instead.
+        if self._controller.last_run_had_errors:
+            self._console.append_line(
+                "-- simulation failed; see errors above. Results not updated --"
+            )
+            self._set_status(f"Failed  ({elapsed:.2f} s)")
+            return
 
         # Build an immutable snapshot of this run's vectors and hand it to the
         # read-only consumers (plotting, measurements, OP annotation).

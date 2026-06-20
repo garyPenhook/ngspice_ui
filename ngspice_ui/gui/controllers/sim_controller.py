@@ -37,8 +37,10 @@ class SimController(QObject):
     plot_init = Signal(object)  # InitDataEvent — emitted when a new sim begins
     plot_data = Signal(object)  # list[DataPointEvent] — batched per drain cycle
     errors_changed = Signal(list)  # list[tuple[int, str]] — (1-based lineno, msg)
-    mc_progress = Signal(int, int)  # (1-based run index, total runs)
-    mc_finished = Signal(int)  # total runs completed
+    # Generic multi-run sequencing (Monte Carlo, parametric/temperature sweeps).
+    # The trailing label distinguishes which sequence kind is running.
+    sequence_progress = Signal(int, int, str)  # (1-based run index, total, kind)
+    sequence_finished = Signal(int, str)  # (total runs completed, kind)
 
     def __init__(
         self,
@@ -49,14 +51,18 @@ class SimController(QObject):
         # session is injectable for tests; production constructs the real one.
         self._session = session if session is not None else NgSpiceSession()
         self._pending_errors: list[tuple[int, str]] = []
+        # True if the current/last run reported an ngspice error via callbacks.
+        self._run_errored = False
 
-        # Monte Carlo sequencing state (sequential bg_run driven by sim_finished)
-        self._mc_queue: list[str] = []
-        self._mc_total = 0
-        self._mc_index = 0
-        self._mc_analysis_line: str | None = None
-        self._mc_connected = False
-        self._mc_active = False  # False while halted/cancelled so sim_finished won't advance
+        # Sequential bg_run state (driven by sim_finished) shared by Monte Carlo
+        # and parametric/temperature sweeps — ngspice 46 has no working .step.
+        self._seq_queue: list[str] = []
+        self._seq_total = 0
+        self._seq_index = 0
+        self._seq_analysis_line: str | None = None
+        self._seq_kind = ""
+        self._seq_connected = False
+        self._seq_active = False  # False while halted/cancelled so sim_finished won't advance
 
         self._drain_timer = QTimer(self)
         self._drain_timer.setInterval(50)
@@ -66,6 +72,21 @@ class SimController(QObject):
     @property
     def session(self) -> NgSpiceSession:
         return self._session
+
+    @property
+    def last_run_had_errors(self) -> bool:
+        """True if the most recent run emitted an ngspice error message.
+
+        ngspice can report a fatal error through the send_char callback while
+        the background run still 'finishes' normally, so completion alone does
+        not imply the run produced valid data.
+        """
+        return self._run_errored
+
+    def _begin_run(self) -> None:
+        """Reset per-run error tracking before launching a (bg) simulation."""
+        self._pending_errors.clear()
+        self._run_errored = False
 
     @Slot(str)
     def load_netlist(self, text: str) -> None:
@@ -78,6 +99,7 @@ class SimController(QObject):
 
     @Slot()
     def run(self) -> None:
+        self._begin_run()
         try:
             self._session.bg_run()
         except RuntimeError as exc:
@@ -91,9 +113,9 @@ class SimController(QObject):
     ) -> None:
         """Load *netlist* text, optionally override its analysis command, then bg_run.
 
-        extra_lines: prepended before the first non-title line (e.g. .temp, .step).
+        extra_lines: prepended before the first non-title line (e.g. .temp).
         """
-        self._pending_errors.clear()
+        self._begin_run()
         lines = netlist.splitlines()
         if analysis_line is not None:
             filtered: list[str] = []
@@ -131,8 +153,8 @@ class SimController(QObject):
 
     @Slot()
     def halt(self) -> None:
-        if self._mc_active:
-            self._mc_active = False  # cancel pending MC runs before the finished signal fires
+        if self._seq_active:
+            self._seq_active = False  # cancel pending runs before the finished signal fires
         try:
             self._session.bg_halt()
         except RuntimeError as exc:
@@ -146,69 +168,72 @@ class SimController(QObject):
             self.output_line.emit(f"resume error: {exc}")
 
     # ------------------------------------------------------------------
-    # Parametric sweep
+    # Sequential multi-run sequencing (bg_run advanced by sim_finished)
+    #
+    # ngspice 46 rejects '.step' as unimplemented, so parametric and
+    # temperature sweeps run as a sequence of independent bg_run passes —
+    # the same mechanism Monte Carlo uses. Each pass produces its own plot,
+    # which the read-only consumers snapshot after every sim_finished.
     # ------------------------------------------------------------------
 
-    def run_param_sweep(
-        self,
-        netlist: str,
-        step_lines: list[str],
-        analysis_line: str | None,
-    ) -> None:
-        """Run a single swept simulation with *step_lines* inserted after the SPICE title."""
-        self.run_with_analysis(netlist, analysis_line, extra_lines=step_lines or None)
-
-    # ------------------------------------------------------------------
-    # Monte Carlo (sequential bg_run, advanced by sim_finished)
-    # ------------------------------------------------------------------
-
-    def run_monte_carlo(
+    def run_sequence(
         self,
         netlists: list[str],
         analysis_line: str | None,
+        kind: str = "Run",
     ) -> None:
         """Run *netlists* one after another, each as its own bg_run.
 
-        Emits ``mc_progress(index, total)`` before each run and
-        ``mc_finished(total)`` once the queue drains. A no-op for an empty list.
+        Emits ``sequence_progress(index, total, kind)`` before each run and
+        ``sequence_finished(total, kind)`` once the queue drains. A no-op for
+        an empty list.
         """
         if not netlists:
             return
-        self._mc_queue = list(netlists)
-        self._mc_total = len(netlists)
-        self._mc_index = 0
-        self._mc_analysis_line = analysis_line
-        self._mc_active = True
-        if not self._mc_connected:
-            self.sim_finished.connect(self._mc_on_finished)
-            self._mc_connected = True
-        self._mc_run_next()
+        self._seq_queue = list(netlists)
+        self._seq_total = len(netlists)
+        self._seq_index = 0
+        self._seq_analysis_line = analysis_line
+        self._seq_kind = kind
+        self._seq_active = True
+        if not self._seq_connected:
+            self.sim_finished.connect(self._seq_on_finished)
+            self._seq_connected = True
+        self._seq_run_next()
 
-    def _mc_run_next(self) -> None:
-        if not self._mc_queue:
+    def run_monte_carlo(self, netlists: list[str], analysis_line: str | None) -> None:
+        """Run Monte Carlo netlists sequentially. See :meth:`run_sequence`."""
+        self.run_sequence(netlists, analysis_line, kind="Monte Carlo")
+
+    def run_param_sweep(self, netlists: list[str], analysis_line: str | None) -> None:
+        """Run one netlist per swept value sequentially. See :meth:`run_sequence`."""
+        self.run_sequence(netlists, analysis_line, kind="Sweep")
+
+    def _seq_run_next(self) -> None:
+        if not self._seq_queue:
             return
-        text = self._mc_queue.pop(0)
-        self._mc_index += 1
-        self.mc_progress.emit(self._mc_index, self._mc_total)
-        self.run_with_analysis(text, self._mc_analysis_line)
+        text = self._seq_queue.pop(0)
+        self._seq_index += 1
+        self.sequence_progress.emit(self._seq_index, self._seq_total, self._seq_kind)
+        self.run_with_analysis(text, self._seq_analysis_line)
 
     @Slot()
-    def _mc_on_finished(self) -> None:
-        if not self._mc_connected:
+    def _seq_on_finished(self) -> None:
+        if not self._seq_connected:
             return
-        if not self._mc_active:
+        if not self._seq_active:
             # Halted mid-sequence — clean up without starting the next run.
-            self.sim_finished.disconnect(self._mc_on_finished)
-            self._mc_connected = False
-            self._mc_queue.clear()
+            self.sim_finished.disconnect(self._seq_on_finished)
+            self._seq_connected = False
+            self._seq_queue.clear()
             return
-        if self._mc_queue:
-            self._mc_run_next()
+        if self._seq_queue:
+            self._seq_run_next()
         else:
-            self.sim_finished.disconnect(self._mc_on_finished)
-            self._mc_connected = False
-            self._mc_active = False
-            self.mc_finished.emit(self._mc_total)
+            self.sim_finished.disconnect(self._seq_on_finished)
+            self._seq_connected = False
+            self._seq_active = False
+            self.sequence_finished.emit(self._seq_total, self._seq_kind)
 
     _MAX_DATA_EVENTS_PER_DRAIN = 250
 
@@ -216,16 +241,31 @@ class SimController(QObject):
     def _drain_queue(self) -> None:
         q = self._session.event_queue
         data_events: list = []
-        data_cap = self._MAX_DATA_EVENTS_PER_DRAIN
+        # Control events (completion, errors, init) must never wait behind a
+        # large live-data backlog or sequenced runs (Monte Carlo / sweeps)
+        # stall between passes. Cap only how many data points we *forward* to
+        # the plot per tick — excess live points are dropped (the post-run
+        # snapshot has the full data) while control events keep draining.
+        data_full = False
         while True:
             try:
                 event = q.get_nowait()
             except queue.Empty:
                 break
+            if isinstance(event, DataPointEvent):
+                if data_full:
+                    continue  # drop excess live points; snapshot retains full data
+                data_events.append(event)
+                if len(data_events) >= self._MAX_DATA_EVENTS_PER_DRAIN:
+                    data_full = True
+                continue
             match event:
                 case CharEvent(line=line):
                     self.output_line.emit(line)
                     if _ERR_MSG_RE.search(line):
+                        # Any error line marks the run as failed, even when no
+                        # line number is present (e.g. "Error: incomplete netlist").
+                        self._run_errored = True
                         m = _ERR_LINE_RE.search(line)
                         if m:
                             self._pending_errors.append((int(m.group(1)), line))
@@ -242,10 +282,5 @@ class SimController(QObject):
                 case InitDataEvent() as e:
                     self.output_line.emit(f"-- plot: {e.plot_name} ({e.plot_type}) --")
                     self.plot_init.emit(e)
-                case DataPointEvent() as e:
-                    data_events.append(e)
-                    data_cap -= 1
-                    if data_cap <= 0:
-                        break  # yield to the GUI; next tick drains the rest
         if data_events:
             self.plot_data.emit(data_events)

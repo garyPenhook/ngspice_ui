@@ -138,25 +138,25 @@ class AnalysisPanel(QWidget):
 
     def _update_preview(self) -> None:
         lines = []
-        temp_line = self._get_temp_line()
-        if temp_line:
-            lines.append(temp_line)
+        temps = self.get_temperatures()
+        if len(temps) == 1:
+            lines.append(f".temp {temps[0]}")
+        elif len(temps) > 1:
+            # ngspice 46 has no working .step temp; multiple temperatures run as
+            # a sequence of independent passes (one .temp each).
+            lines.append(f"# {len(temps)} runs: .temp " + " / ".join(temps))
         main_line = self.get_netlist_line()
         if main_line:
             lines.append(main_line)
         self._preview.setText("\n".join(lines) if lines else "(from netlist)")
         self.analysis_changed.emit()
 
-    def _get_temp_line(self) -> str:
+    def get_temperatures(self) -> list[str]:
+        """Return the configured temperature value(s), or [] if not enabled."""
         if not self._temp_box.isChecked():
-            return ""
+            return []
         val = self._temp_edit.text().strip()
-        if not val:
-            return ""
-        temps = val.split()
-        if len(temps) == 1:
-            return f".temp {temps[0]}"
-        return ".step temp list " + " ".join(temps)
+        return val.split() if val else []
 
     def _get_widgets(self, key: str) -> dict[str, QWidget]:
         idx = self._combo.currentIndex()
@@ -227,11 +227,6 @@ class AnalysisPanel(QWidget):
                 assert isinstance(w, QLineEdit)
                 kwargs[p.name] = w.text().strip()
         return "." + spec.command.format(**kwargs)
-
-    def get_temperature_lines(self) -> list[str]:
-        """Return .temp/.step lines to prepend, or empty list."""
-        line = self._get_temp_line()
-        return [line] if line else []
 
     def get_config(self) -> dict:
         """Return a JSON-serialisable dict describing the current analysis setup."""
