@@ -1,0 +1,9 @@
+Resistive Voltage Divider
+* The simplest possible circuit: Vout = Vin * R2/(R1+R2).
+* With R1=R2=10k, Vout = Vin/2. The .dc sweep shows the linear relation.
+V1 in 0 DC 10
+R1 in out 10k
+R2 out 0 10k
+.op
+.dc V1 0 10 0.5
+.end

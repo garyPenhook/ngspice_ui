@@ -1,0 +1,17 @@
+Sallen-Key 2nd-Order Low-Pass Filter
+* Unity-gain Sallen-Key active filter built around an ideal op-amp subckt.
+* R1=R2=10k, C1=C2=10nF -> fc ~= 1/(2*pi*sqrt(R1*R2*C1*C2)) ~ 1.59 kHz,
+* with a -40 dB/decade rolloff above the corner. The op-amp is an ideal
+* high-gain VCVS (illustrative, not a real part).
+Vin in 0 AC 1 SIN(0 1 1k)
+R1  in n1  10k
+R2  n1 np  10k
+C1  n1 out 10n
+C2  np 0   10n
+XOA np out out OPAMP
+.subckt OPAMP inp inn outp
+Eoa outp 0 inp inn 1e6
+.ends
+.ac dec 20 10 100k
+.tran 20u 5m
+.end
