@@ -5,13 +5,39 @@ Pure functions — no Qt, no libngspice.
 
 from __future__ import annotations
 
+import pytest
+
 from ngspice_ui.schematic.kicad.sexpr import (
     atom,
     find,
     find_all,
     parse_sexp,
     prop,
+    sub_symbol_unit,
 )
+
+
+def test_parse_rejects_unterminated_list():
+    with pytest.raises(ValueError, match="Unterminated"):
+        parse_sexp("(a (b 1)")
+
+
+def test_parse_rejects_unterminated_string():
+    with pytest.raises(ValueError, match="Unterminated string"):
+        parse_sexp('(a "no closing quote)')
+
+
+def test_parse_rejects_trailing_data():
+    with pytest.raises(ValueError, match="Trailing data"):
+        parse_sexp("(a) (b)")
+
+
+def test_sub_symbol_unit():
+    assert sub_symbol_unit("R_1_1") == 1
+    assert sub_symbol_unit("LM358_2_1") == 2
+    assert sub_symbol_unit("Op_Amp_3_1") == 3  # base name with underscores
+    assert sub_symbol_unit("DUAL_0_1") == 0  # common-to-all-units
+    assert sub_symbol_unit("weird") == 0
 
 
 def test_parse_nested_lists():

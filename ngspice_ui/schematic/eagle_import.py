@@ -14,9 +14,33 @@ GND net is mapped to SPICE node '0'.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import defusedxml.ElementTree as ET
+
+# Eagle net names that map to SPICE ground (node 0).
+_GND_NAMES: frozenset[str] = frozenset({"gnd", "0", "0v", "vss", "agnd", "dgnd"})
+
+
+def _sanitize_net(name: str) -> str:
+    """Convert an Eagle net name into a valid ngspice node identifier.
+
+    Mirrors the KiCad importer: ground aliases → '0', leading +/- → vp/vn
+    (so '+5V' → 'vp5v', not an illegal node), leading digit → 'v' prefix, and
+    any remaining illegal character → '_'.
+    """
+    n = name.strip()
+    if n.lower() in _GND_NAMES:
+        return "0"
+    if n.startswith("+"):
+        n = "vp" + n[1:]
+    elif n.startswith("-"):
+        n = "vn" + n[1:]
+    if n and n[0].isdigit():
+        n = "v" + n
+    n = re.sub(r"[^A-Za-z0-9_]", "_", n)
+    return n or "net"
 
 # Default SPICE node ordering by element-type letter.
 # Keys are pin names as used in Eagle library symbols.
@@ -95,9 +119,7 @@ def import_eagle_sch(path: str | Path) -> list[str]:
                 parts[pname]["spice_seq"] = ss
 
         for net in sheet.findall("nets/net"):
-            net_name = net.get("name", "")
-            if net_name.upper() == "GND":
-                net_name = "0"
+            net_name = _sanitize_net(net.get("name", ""))
             for seg in net.findall("segment"):
                 for pinref in seg.findall("pinref"):
                     pname = pinref.get("part", "")

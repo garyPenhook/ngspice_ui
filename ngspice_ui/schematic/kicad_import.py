@@ -32,6 +32,7 @@ from .kicad.sexpr import find as _find
 from .kicad.sexpr import find_all as _find_all
 from .kicad.sexpr import parse_sexp as _parse_sexp
 from .kicad.sexpr import prop as _prop
+from .kicad.sexpr import sub_symbol_unit as _sub_unit
 
 # ---------------------------------------------------------------------------
 # Net name sanitisation
@@ -206,19 +207,25 @@ class _UF:
 # ---------------------------------------------------------------------------
 
 
-def _extract_lib_pins(root: list) -> dict[str, dict[str, tuple[float, float]]]:
+def _extract_lib_pins(root: list) -> dict[str, dict[int, dict[str, tuple[float, float]]]]:
     """
-    Returns  lib_id → {pin_number: (rel_x, rel_y)}
+    Returns  lib_id → {unit: {pin_number: (rel_x, rel_y)}}
     where (rel_x, rel_y) is the electrical connection tip in lib coordinates.
+
+    Pins are kept per-unit so a multi-unit IC placed as several symbol
+    instances transforms only the pins of the unit actually placed — merging
+    every unit's pins onto each placement corrupts connectivity.
     """
     ls = _find(root, "lib_symbols")
     if ls is None:
         return {}
-    result: dict[str, dict[str, tuple[float, float]]] = {}
+    result: dict[str, dict[int, dict[str, tuple[float, float]]]] = {}
     for sym in _find_all(ls, "symbol"):
         lib_name = _atom(sym, 1)
-        pins: dict[str, tuple[float, float]] = {}
+        by_unit: dict[int, dict[str, tuple[float, float]]] = {}
         for sub in _find_all(sym, "symbol"):
+            unit = _sub_unit(_atom(sub, 1))
+            pins = by_unit.setdefault(unit, {})
             for pin in _find_all(sub, "pin"):
                 num = _find(pin, "number")
                 at = _find(pin, "at")
@@ -227,8 +234,17 @@ def _extract_lib_pins(root: list) -> dict[str, dict[str, tuple[float, float]]]:
                         float(_atom(at, 1, "0")),
                         float(_atom(at, 2, "0")),
                     )
-        result[lib_name] = pins
+        result[lib_name] = by_unit
     return result
+
+
+def _pins_for_unit(
+    by_unit: dict[int, dict[str, tuple[float, float]]], unit: int
+) -> dict[str, tuple[float, float]]:
+    """Pins visible for a placed symbol instance: unit-0 (common) plus *unit*."""
+    pins = dict(by_unit.get(0, {}))
+    pins.update(by_unit.get(unit, {}))
+    return pins
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +331,7 @@ def _assign_power_names(
         mx = isinstance(mir, list) and _atom(mir, 1) == "x"
         my = isinstance(mir, list) and _atom(mir, 1) == "y"
 
-        lp = lib_pins.get(lib_id, {})
+        lp = _pins_for_unit(lib_pins.get(lib_id, {}), _unit_of(sym))
         if lp:
             px, py = next(iter(lp.values()))
             pt = _xform(px, py, sx, sy, angle, mx, my)
@@ -399,6 +415,11 @@ def _make_line(
     else:
         nets = _sorted_nets(pin_nets)
 
+    # Subcircuit instances must reference with an 'X' card; KiCad refs like
+    # 'U1' would otherwise emit an invalid 'U1 ...' element line.
+    if etype == "X" and not ref.upper().startswith("X"):
+        ref = f"X{ref}"
+
     model = sim_model if sim_model else value
     return f"{ref} {' '.join(nets)} {model}"
 
@@ -452,7 +473,7 @@ def import_kicad_sch(path: str | Path) -> list[str]:
         mx = isinstance(mir, list) and _atom(mir, 1) == "x"
         my = isinstance(mir, list) and _atom(mir, 1) == "y"
 
-        lp = lib_pins.get(lib_id, {})
+        lp = _pins_for_unit(lib_pins.get(lib_id, {}), _unit_of(sym))
         pin_nets: dict[str, str] = {}
         for pin_num, (px, py) in lp.items():
             pin_nets[pin_num] = net_at(_xform(px, py, sx, sy, angle, mx, my))
