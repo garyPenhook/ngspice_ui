@@ -45,6 +45,7 @@ _DOT_COMPLETIONS: list[str] = sorted(
         ".ends",
         ".global",
         ".if",
+        ".inc",
         ".include",
         ".lib",
         ".measure",
@@ -70,7 +71,10 @@ _VALUE_RE = re.compile(
     r"^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:MEG|[kKmMuUnNpPfFgGtT])?$",
     re.IGNORECASE,
 )
-_INCLUDE_RE = re.compile(r'^\s*\.(?:include|lib)\s+"?([^"\s]+)"?', re.IGNORECASE)
+# Match .include / .inc / .lib — the engine rewrites all three (see
+# engine.session._INCLUDE_RE) and the linter resolves all three, so Ctrl+click
+# include navigation must recognise .inc too rather than silently doing nothing.
+_INCLUDE_RE = re.compile(r'^\s*\.(?:include|inc|lib)\s+"?([^"\s]+)"?', re.IGNORECASE)
 
 _ERR_FMT: QTextCharFormat | None = None
 

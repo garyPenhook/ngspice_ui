@@ -323,6 +323,63 @@ def test_safe_eval_allows_reasonable_powers():
     assert safe_eval("np.sum(np.array([1.0, 2.0]) ** 2)", _ns()) == pytest.approx(5.0)
 
 
+def test_safe_eval_blocks_oversized_sequence_repeat():
+    # ast.List/ast.Mult are allowed (np.interp PWL arrays need them), so the
+    # runtime __safe_mul__ guard must stop [x] * huge from building a giant list.
+    with pytest.raises(ValueError, match="oversized sequence"):
+        safe_eval("[0] * 10**9", _ns())
+    with pytest.raises(ValueError, match="oversized sequence"):
+        safe_eval("int(max(np.array([1.0]))) * ([0] * 60000000)", _ns())
+
+
+def test_safe_eval_allows_reasonable_multiplication():
+    # The sequence guard must not touch ordinary numeric / array multiplication.
+    assert safe_eval("3 * 4", _ns()) == 12
+    assert safe_eval("[0] * 3", _ns()) == [0, 0, 0]
+    assert safe_eval("np.sum(np.array([1.0, 2.0]) * 2)", _ns()) == pytest.approx(6.0)
+
+
+def test_safe_numpy_caps_combiners():
+    from ngspice_ui.models.expr import SAFE_NUMPY
+
+    ns = _ns(np=SAFE_NUMPY)
+    # A long-but-cheap input list fed to a combiner would otherwise allocate an
+    # oversized result; the wrappers estimate the result size first.
+    with pytest.raises(ValueError, match="refusing to allocate"):
+        safe_eval("np.concatenate([np.zeros(40000000), np.zeros(40000000)])", ns)
+    with pytest.raises(ValueError, match="refusing to allocate"):
+        safe_eval("np.outer(np.zeros(10000), np.zeros(10000))", ns)
+    # Reasonable combines still work.
+    assert safe_eval("np.sum(np.concatenate([np.zeros(3), np.ones(2)]))", ns) == pytest.approx(2.0)
+
+
+def test_compile_lambda_applies_runtime_guards():
+    from ngspice_ui.models.expr import SAFE_NUMPY, compile_lambda
+
+    ns = {"__builtins__": {}, "np": SAFE_NUMPY, "math": math, "float": float}
+    # A well-formed source compiles and evaluates against its parameters.
+    fn = compile_lambda("np.sin(t) + 0.0", ("t", "name"), ns)
+    assert fn(0.0, "vext") == pytest.approx(0.0)
+
+    # The runtime ** / * guards wrap the lambda body, so a callback whose
+    # operands are only known at call time still cannot hang or exhaust memory.
+    pow_fn = compile_lambda("int(t) ** 100000000", ("t", "name"), {**ns, "int": int})
+    with pytest.raises(ValueError, match="oversized integer power"):
+        pow_fn(10.0, "vext")
+
+    seq_fn = compile_lambda("[t] * 1000000000", ("t", "name"), ns)
+    with pytest.raises(ValueError, match="oversized sequence"):
+        seq_fn(0.0, "vext")
+
+
+def test_compile_lambda_rejects_disallowed_construct():
+    from ngspice_ui.models.expr import SAFE_NUMPY, compile_lambda
+
+    ns = {"__builtins__": {}, "np": SAFE_NUMPY, "math": math}
+    with pytest.raises(ValueError, match="not allowed"):
+        compile_lambda("__import__('os')", ("t", "name"), ns)
+
+
 def test_compute_fft_rejects_short_input():
     with pytest.raises(ValueError):
         compute_fft(np.array([0.0, 1.0]), np.array([0.0, 1.0]))

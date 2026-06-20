@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_INCLUDE_RE = re.compile(r'^\s*\.(?:include|lib)\s+"?([^"\s]+)"?', re.IGNORECASE)
+# Match .include / .inc / .lib — the engine rewrites all three at load time
+# (see engine.session._INCLUDE_RE), so the linter must resolve all three too or
+# a missing .inc file slips through lint and fails only at simulation time.
+_INCLUDE_RE = re.compile(r'^\s*\.(include|inc|lib)\s+"?([^"\s]+)"?', re.IGNORECASE)
 # Q/M/J/D devices: last whitespace-delimited token before optional inline comment is the model name
 _MODEL_REF_RE = re.compile(r"^\s*[qmjd]\w+(?:\s+\S+){2,}\s+(\w+)\s*(?:;.*)?$", re.IGNORECASE)
 _SUBCKT_DEF_RE = re.compile(r"^\s*\.subckt\s+(\w+)", re.IGNORECASE)
@@ -65,10 +68,10 @@ def lint(text: str, netlist_path: Path | None = None) -> list[tuple[int, str]]:
 
         m3 = _INCLUDE_RE.match(stripped)
         if m3 and netlist_path is not None:
-            inc = m3.group(1)
+            directive, inc = m3.group(1).lower(), m3.group(2)
             p = (netlist_path.parent / inc).resolve()
             if not p.exists():
-                issues.append((i, f".include not found: {inc}"))
+                issues.append((i, f".{directive} not found: {inc}"))
 
         # Collect model references from Q/M/J/D device lines
         m4 = _MODEL_REF_RE.match(stripped)

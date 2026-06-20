@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...models.expr import SAFE_NUMPY as _SAFE_NUMPY
-from ...models.expr import validate_expr as _validate_expr
+from ...models.expr import compile_lambda as _compile_lambda
 
 _EXPR_SCOPE = {"__builtins__": {}, "math": math, "np": _SAFE_NUMPY, "abs": abs, "float": float}
 
@@ -66,19 +66,16 @@ _COSIM_NAMES = frozenset({"t", "name"})
 def _compile_expr(expr: str, label: str):
     """Compile a user expression into a lambda(t, name) → float.
 
-    The expression is first validated against the shared AST allowlist
-    (numeric/numpy/math only). ``eval`` with empty builtins is *not* a security
-    boundary on its own, so the validation pass is what blocks attribute
-    escapes, imports, and arbitrary calls.
+    The expression is validated against the shared AST allowlist (numeric/
+    numpy/math only) and compiled through :func:`compile_lambda`, which also
+    routes every ``**`` / ``*`` through the runtime guards. ``eval`` with empty
+    builtins is *not* a security boundary on its own; the validation + runtime
+    guards are what block attribute escapes, imports, oversized integer powers,
+    and giant sequence allocations during the per-timestep callbacks.
     """
     try:
-        _validate_expr(expr, _COSIM_NAMES)
+        return _compile_lambda(expr, ("t", "name"), _EXPR_SCOPE, _COSIM_NAMES)
     except (ValueError, SyntaxError) as exc:
-        raise ValueError(f"{label}: {exc}") from exc
-    src = f"lambda t, name, math=math, np=np: ({expr})"
-    try:
-        return eval(src, _EXPR_SCOPE)  # noqa: S307
-    except SyntaxError as exc:
         raise ValueError(f"{label}: {exc}") from exc
 
 
@@ -270,13 +267,10 @@ class CoSimWidget(QWidget):
         sync_fn = None
         sync_expr = self._sync_edit.text().strip()
         if sync_expr:
-            # sync receives (t, old_delta); validate then compile with that
-            # exact signature (no name-substitution tricks).
+            # sync receives (t, old_delta); validate and compile with that exact
+            # signature under the same allowlist + runtime guards as the sources.
             try:
-                _validate_expr(sync_expr, frozenset({"t", "old_delta"}))
-                _sf = eval(  # noqa: S307
-                    f"lambda t, old_delta, math=math, np=np: ({sync_expr})", _EXPR_SCOPE
-                )
+                _sf = _compile_lambda(sync_expr, ("t", "old_delta"), _EXPR_SCOPE)
             except (ValueError, SyntaxError) as exc:
                 self._status.setText(f"sync: {exc}")
                 return

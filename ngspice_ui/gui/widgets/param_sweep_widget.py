@@ -142,7 +142,9 @@ class ParamSweepWidget(QWidget):
                     v += step
             return vals
         else:
-            return self._list_edit.text().split()
+            # List mode is just as capable of producing an unbounded run queue as
+            # linear mode (one netlist + run per token), so apply the same cap.
+            return self._list_edit.text().split()[:_MAX_SWEEP_POINTS]
 
     def _update_preview(self) -> None:
         name = self._name_edit.text().strip() or "param"
@@ -151,8 +153,9 @@ class ParamSweepWidget(QWidget):
             self._preview.setText("")
             return
         shown = vals if len(vals) <= 8 else [*vals[:8], f"… (+{len(vals) - 8})"]
+        cap_note = f"  (capped at {_MAX_SWEEP_POINTS})" if len(vals) >= _MAX_SWEEP_POINTS else ""
         self._preview.setText(
-            f"{len(vals)} run(s), one per value:\n.param {name}=" + "  ".join(shown)
+            f"{len(vals)} run(s){cap_note}, one per value:\n.param {name}=" + "  ".join(shown)
         )
 
     def _emit_sweep(self) -> None:

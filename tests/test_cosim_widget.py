@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from ngspice_ui.gui.widgets.cosim_widget import CoSimWidget  # noqa: E402
+from ngspice_ui.gui.widgets.cosim_widget import CoSimWidget, _compile_expr  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -61,3 +61,16 @@ def test_invalid_expression_is_rejected(qapp):
     # A disallowed expression must not register any callback dispatch.
     assert "row 1" in w._status.text() or "not allowed" in w._status.text()
     assert len(session.sync_calls) == calls_before  # _apply bailed before init_sync
+
+
+def test_compiled_source_enforces_runtime_guards(qapp):
+    # A valid co-sim source compiles and evaluates per-timestep.
+    fn = _compile_expr("np.sin(t)", "row 1 (vext)")
+    assert fn(0.0, "vext") == pytest.approx(0.0)
+
+    # The source path now routes through the same ** / * guards as safe_eval, so
+    # an expression that validates but would build a giant sequence at call time
+    # is refused inside the callback instead of hanging the simulation.
+    blowup = _compile_expr("[t] * 1000000000", "row 1 (vext)")
+    with pytest.raises(ValueError, match="oversized sequence"):
+        blowup(1.0, "vext")
