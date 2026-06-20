@@ -405,6 +405,68 @@ _PIN_ORDER: dict[str, list[str]] = {
 }
 
 
+# Model pin identifiers in *SPICE node order*, keyed by SPICE element letter.
+# These are the right-hand-side tokens KiCad writes in its Sim.Pins field,
+# verified against KiCad's ngspice model data: diode {"A","K"} (anode, cathode);
+# BJT {"C","B","E","<S>"} (collector, base, emitter, optional substrate). The
+# "<…>" optional markers are stripped on comparison. MOSFET/JFET/MESFET follow
+# the standard ngspice node order (drain, gate, source[, bulk]); their single-
+# letter labels match KiCad's pin names.
+_MODEL_PIN_ORDER: dict[str, list[str]] = {
+    "D": ["A", "K"],
+    "Q": ["C", "B", "E", "S"],
+    "M": ["D", "G", "S", "B"],
+    "J": ["D", "G", "S"],
+    "Z": ["D", "G", "S"],
+}
+
+# KiCad 7/8 "Sim.Device" property value → SPICE element letter. Without this,
+# modern symbols (which carry Sim.Device + Sim.Name instead of the older
+# Sim.Type) fell through to the reference designator's first letter — emitting
+# an invalid "U1 …" card for a subcircuit instead of "XU1 …".
+_DEVICE_TO_ETYPE: dict[str, str] = {
+    "R": "R",
+    "C": "C",
+    "L": "L",
+    "K": "K",
+    "D": "D",
+    "NPN": "Q",
+    "PNP": "Q",
+    "NJFET": "J",
+    "PJFET": "J",
+    "NMOS": "M",
+    "PMOS": "M",
+    "NMES": "Z",
+    "PMES": "Z",
+    "V": "V",
+    "I": "I",
+    "E": "E",
+    "F": "F",
+    "G": "G",
+    "H": "H",
+    "SUBCKT": "X",
+    "XSPICE": "A",
+}
+
+
+def _resolve_etype(sim_device: str, sim_type: str, ref: str) -> str:
+    """Resolve the SPICE element letter from Sim.Device / Sim.Type / reference.
+
+    Precedence: a recognised modern ``Sim.Device`` value, then a legacy
+    ``Sim.Type`` (either a recognised device value or a bare single-letter hint
+    such as the importer's own "X"), then the reference designator's first
+    letter.
+    """
+    for val in (sim_device, sim_type):
+        if val:
+            v = val.strip().upper()
+            if v in _DEVICE_TO_ETYPE:
+                return _DEVICE_TO_ETYPE[v]
+            if len(v) == 1:
+                return v
+    return ref[0].upper() if ref else "X"
+
+
 def _sorted_nets(pin_nets: dict[str, str]) -> list[str]:
     def _key(k: str) -> tuple:
         return (0, int(k)) if k.isdigit() else (1, k)
@@ -412,38 +474,68 @@ def _sorted_nets(pin_nets: dict[str, str]) -> list[str]:
     return [pin_nets[k] for k in sorted(pin_nets, key=_key)]
 
 
-def _apply_sim_pins(sim_pins: str, pin_nets: dict[str, str]) -> list[str]:
+def _apply_sim_pins(sim_pins: str, pin_nets: dict[str, str], etype: str = "") -> list[str]:
+    """Order nets per KiCad's Sim.Pins field, e.g. ``"1=A 2=K"`` / ``"1=B 2=C 3=E"``.
+
+    Each token is ``symbolPinNumber=modelPin`` (KiCad's documented format), and
+    KiCad writes the tokens in *symbol-pin* order — **not** SPICE node order. The
+    emitted card must instead list nets in the model's SPICE node order, so we
+    map each model pin to its net and then reorder:
+
+    * model pins identified by name → canonical order from ``_MODEL_PIN_ORDER``
+      (e.g. a diode's ``A`` before ``K`` regardless of token order, so ``1=K
+      2=A`` correctly yields ``anode cathode`` instead of the reversed pair the
+      previous "take tokens as written" logic produced);
+    * model pins identified by index → numeric order (subcircuits, whose node
+      order is defined by the ``.subckt`` line);
+    * anything else → fall back to token order.
     """
-    Interpret Sim.Pins ordering string, e.g. "1=A 2=K" or "A=1 K=2".
-    Each token maps a SPICE position (digit) to a schematic pin number (alpha/num).
-    """
-    result = []
+    by_model: dict[str, str] = {}
+    order_seen: list[str] = []
     for token in sim_pins.split():
         if "=" not in token:
             continue
-        a, b = token.split("=", 1)
-        if a.isdigit():
-            result.append(pin_nets.get(b) or pin_nets.get(a) or "?")
-        else:
-            result.append(pin_nets.get(a) or pin_nets.get(b) or "?")
-    return result or _sorted_nets(pin_nets)
+        sym, model = token.split("=", 1)
+        model = model.strip().strip("<>").upper()
+        net = pin_nets.get(sym.strip())
+        if not model or net is None:
+            net = net or "?"
+        by_model[model] = net
+        order_seen.append(model)
+
+    if not by_model:
+        return _sorted_nets(pin_nets)
+
+    canon = _MODEL_PIN_ORDER.get(etype.upper())
+    if all(m.isdigit() for m in by_model):
+        keys = sorted(by_model, key=int)
+    elif canon:
+        keys = [m for m in canon if m in by_model]
+        keys += [m for m in order_seen if m not in keys]
+    else:
+        keys = list(dict.fromkeys(order_seen))  # de-dup, preserve first-seen order
+    return [by_model[m] for m in keys]
 
 
 def _make_line(
-    ref: str, value: str, sim_type: str, sim_model: str, sim_pins: str, pin_nets: dict[str, str]
+    ref: str,
+    value: str,
+    sim_type: str,
+    sim_model: str,
+    sim_pins: str,
+    pin_nets: dict[str, str],
+    sim_device: str = "",
+    sim_name: str = "",
 ) -> str:
-    etype = (sim_type or ref[0]).upper()
+    etype = _resolve_etype(sim_device, sim_type, ref)
 
     if sim_pins:
-        nets = _apply_sim_pins(sim_pins, pin_nets)
+        nets = _apply_sim_pins(sim_pins, pin_nets, etype)
     elif etype in _PIN_ORDER:
         order = _PIN_ORDER[etype]
         by_order = [pin_nets[p] for p in order if p in pin_nets]
         if by_order:
             nets = by_order
-            # MOSFET: bulk = source if not present in schematic
-            if etype == "M" and len(nets) == 3:
-                nets = nets + [nets[2]]
         else:
             # Pin numbers don't match _PIN_ORDER — use sorted nets but cap
             # to the expected node count so we don't emit extra nodes.
@@ -452,12 +544,17 @@ def _make_line(
     else:
         nets = _sorted_nets(pin_nets)
 
+    # MOSFET: bulk defaults to source when a 3-terminal symbol omits it. Applied
+    # uniformly so it holds whether the order came from Sim.Pins or _PIN_ORDER.
+    if etype == "M" and len(nets) == 3:
+        nets = nets + [nets[2]]
+
     # Subcircuit instances must reference with an 'X' card; KiCad refs like
     # 'U1' would otherwise emit an invalid 'U1 ...' element line.
     if etype == "X" and not ref.upper().startswith("X"):
         ref = f"X{ref}"
 
-    model = sim_model if sim_model else value
+    model = sim_name or sim_model or value
     return f"{ref} {' '.join(nets)} {model}"
 
 
@@ -519,7 +616,9 @@ def import_kicad_sch(path: str | Path) -> list[str]:
         if ref not in groups:
             groups[ref] = {
                 "value": _prop(sym, "Value"),
+                "sim_device": _prop(sym, "Sim.Device"),
                 "sim_type": _prop(sym, "Sim.Type"),
+                "sim_name": _prop(sym, "Sim.Name"),
                 "sim_model": (_prop(sym, "Sim.SpiceModel") or _prop(sym, "Spice_Model")),
                 "sim_pins": (_prop(sym, "Sim.Pins") or _prop(sym, "Spice_Node_Sequence")),
                 "sim_lib": (_prop(sym, "Sim.Library") or _prop(sym, "Spice_Lib_File")),
@@ -530,7 +629,9 @@ def import_kicad_sch(path: str | Path) -> list[str]:
         if _unit_of(sym) == 1:
             for prop_key, kicad_key_new, kicad_key_old in (
                 ("value", "Value", ""),
+                ("sim_device", "Sim.Device", ""),
                 ("sim_type", "Sim.Type", ""),
+                ("sim_name", "Sim.Name", ""),
                 ("sim_model", "Sim.SpiceModel", "Spice_Model"),
                 ("sim_pins", "Sim.Pins", "Spice_Node_Sequence"),
                 ("sim_lib", "Sim.Library", "Spice_Lib_File"),
@@ -569,6 +670,8 @@ def import_kicad_sch(path: str | Path) -> list[str]:
             g["sim_model"],
             g["sim_pins"],
             g["pin_nets"],
+            sim_device=g.get("sim_device", ""),
+            sim_name=g.get("sim_name", ""),
         )
         # A '?' token means a pin in the Sim.Pins ordering had no resolvable
         # net — emitting it would produce an invalid card that ngspice rejects

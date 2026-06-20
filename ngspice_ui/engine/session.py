@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import ctypes
 import queue
+import re
 import threading
 from ctypes import c_char_p, c_int
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -84,6 +86,12 @@ class NgSpiceSession:
             # Must keep callback objects alive for the entire session lifetime
             self._callbacks = build_callbacks(self.event_queue)
 
+            # Tracks whether the first failure of each co-sim callback kind has
+            # been reported for the *current* run.  Reset at every run start so a
+            # failure is surfaced once per run, not once per process — see
+            # init_sync / _reset_cosim_report.
+            self._cosim_reported = {"v": False, "i": False, "s": False}
+
             ret = self._lib.ngSpice_Init(
                 self._callbacks["send_char"],
                 self._callbacks["send_stat"],
@@ -96,9 +104,15 @@ class NgSpiceSession:
             if ret != 0:
                 raise RuntimeError(f"ngSpice_Init returned {ret}")
 
-            # nospinit/nospiceinit must be called after Init (they touch
-            # Init-allocated state). Both were added in newer ngspice releases;
-            # skip silently when the loaded library predates them.
+            # nospinit/nospiceinit must be called *after* ngSpice_Init here.
+            # sharedspice.h documents "To be called before ngSpice_Init()", but
+            # the installed ngspice-46 shared library *segfaults* the instant
+            # ngSpice_nospinit() is invoked before Init (the flag it writes is
+            # only allocated by Init on this build) — verified directly. Calling
+            # them after Init is crash-free, so we keep that order despite the
+            # header's advice; do not "correct" this to match the comment.
+            # Both were added in newer ngspice releases; skip silently when the
+            # loaded library predates them.
             if suppress_spinit and hasattr(self._lib, "ngSpice_nospinit"):
                 self._lib.ngSpice_nospinit()
             if suppress_spiceinit and hasattr(self._lib, "ngSpice_nospiceinit"):
@@ -111,11 +125,19 @@ class NgSpiceSession:
     # Netlist loading
     # ------------------------------------------------------------------
 
-    def load_netlist(self, lines: list[str]) -> None:
+    def load_netlist(self, lines: list[str], base_dir: "str | None" = None) -> None:
         """Load a circuit from a list of netlist lines.
 
         Halts any running background simulation first — ngspice's bg thread
         must fully exit before ngSpice_Circ is safe to call.
+
+        ``base_dir``, when given, is the directory the deck was loaded from.
+        Relative ``.include`` / ``.lib`` paths are resolved against it before the
+        deck reaches ngspice: ``ngSpice_Circ`` receives only the lines, with no
+        notion of an originating file, so it would otherwise resolve relative
+        includes against the *application* working directory and fail. Only paths
+        that actually exist under ``base_dir`` are rewritten, leaving absolute
+        paths and in-deck ``.lib`` section references untouched.
 
         The list must contain the netlist body; a trailing '.end' is added
         automatically if absent. The array is NULL-terminated for the C API.
@@ -123,6 +145,8 @@ class NgSpiceSession:
         self._safe_halt()
 
         clean = [ln.rstrip() for ln in lines]
+        if base_dir is not None:
+            clean = _rewrite_includes(clean, base_dir)
         if not clean or clean[-1].strip().lower() != ".end":
             clean.append(".end")
 
@@ -168,11 +192,26 @@ class NgSpiceSession:
 
     def run(self) -> None:
         """Start a foreground simulation (blocks until done)."""
+        self._reset_cosim_report()
         self.command("run")
 
     def bg_run(self) -> None:
         """Start simulation in ngspice's background thread (non-blocking)."""
+        self._reset_cosim_report()
         self.command("bg_run")
+
+    def _reset_cosim_report(self) -> None:
+        """Clear per-run co-sim failure flags so each run re-reports its first
+        callback failure.
+
+        Without this, a co-sim source that fails on run 1 sets its flag for the
+        lifetime of the registered callback; runs 2+ then silently force 0 V/A
+        output and emit no error, so the controller accepts scientifically wrong
+        results as valid.  The flags live on the session (not the init_sync
+        closure) precisely so a run boundary can reset them.
+        """
+        for k in self._cosim_reported:
+            self._cosim_reported[k] = False
 
     def bg_halt(self) -> None:
         """Pause a running background simulation."""
@@ -287,11 +326,9 @@ class NgSpiceSession:
         # failure of each callback kind through the event queue (which the
         # controller treats as a run error) so the user is told the results are
         # bogus. Reported once per kind to avoid flooding the queue every step.
-        reported = {"v": False, "i": False, "s": False}
-
         def _report(kind: str, msg: str) -> None:
-            if not reported[kind]:
-                reported[kind] = True
+            if not self._cosim_reported[kind]:
+                self._cosim_reported[kind] = True
                 self.event_queue.put_nowait(CharEvent(line=msg))
 
         def _vsrc(voltage_ptr, time, srcname, srcindex, userdata):
@@ -421,6 +458,64 @@ class VectorData:
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
+
+# Lines that carry a file path ngspice resolves at parse time. ``.lib`` may also
+# appear in its in-deck section form (``.lib libname``), which has no path and is
+# left alone by the "file must exist under base_dir" guard below.
+_INCLUDE_RE = re.compile(r"^(\s*\.(?:include|inc|lib)\b\s+)(.*)$", re.IGNORECASE)
+
+
+def _split_first_path_token(rest: str) -> "tuple[str | None, str]":
+    """Split *rest* into (first path token, remainder), honouring quotes.
+
+    Returns ``(None, "")`` when no usable token is present (e.g. an unterminated
+    quote), signalling the caller to leave the line untouched.
+    """
+    rest = rest.strip()
+    if not rest:
+        return None, ""
+    if rest[0] in "\"'":
+        q = rest[0]
+        end = rest.find(q, 1)
+        if end == -1:
+            return None, ""
+        return rest[1:end], rest[end + 1 :]
+    parts = rest.split(None, 1)
+    remainder = f" {parts[1]}" if len(parts) > 1 else ""
+    return parts[0], remainder
+
+
+def _rewrite_includes(lines: list[str], base_dir: "str | Path") -> list[str]:
+    """Rewrite relative ``.include`` / ``.lib`` paths to absolute, against *base_dir*.
+
+    Conservative by design: a path is rewritten only when it is relative *and*
+    the resolved file exists under ``base_dir``. Absolute paths, system-library
+    references, and in-deck ``.lib`` section names (which are not files) are
+    therefore preserved unchanged.
+    """
+    base = Path(base_dir)
+    out: list[str] = []
+    for ln in lines:
+        m = _INCLUDE_RE.match(ln)
+        if not m:
+            out.append(ln)
+            continue
+        head, rest = m.group(1), m.group(2)
+        path_str, remainder = _split_first_path_token(rest)
+        if not path_str:
+            out.append(ln)
+            continue
+        p = Path(path_str)
+        if p.is_absolute():
+            out.append(ln)
+            continue
+        candidate = base / p
+        if not candidate.exists():
+            out.append(ln)
+            continue
+        out.append(f'{head}"{candidate.resolve()}"{remainder}')
+    return out
 
 
 def _char_pp_to_list(ptr) -> list[str]:

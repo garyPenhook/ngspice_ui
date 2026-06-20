@@ -57,6 +57,41 @@ def test_get_vector_missing_raises_keyerror():
         r.get_vector("bare_missing")
 
 
+def _engine_named_result() -> SimulationResult:
+    """A snapshot keyed the way libngspice actually reports vectors: node
+    voltages under the bare node name, source currents as ``<src>#branch``."""
+    return SimulationResult(
+        current_plot_name="tran1",
+        plots={"tran1": ["time", "out", "v1#branch"]},
+        vectors={
+            "tran1.time": _vec("time", [0.0, 1.0, 2.0]),
+            "tran1.out": _vec("out", [0.0, 0.5, 1.0]),
+            "tran1.v1#branch": _vec("v1#branch", [-1e-3, -1e-3, -1e-3]),
+        },
+    )
+
+
+def test_get_vector_resolves_v_of_node_to_bare_engine_name():
+    # Regression: measurements/probes request v(out); the engine stored "out".
+    r = _engine_named_result()
+    assert r.get_vector("v(out)").data.tolist() == [0.0, 0.5, 1.0]
+    assert r.get_vector("tran1.v(out)").data.tolist() == [0.0, 0.5, 1.0]
+    # The bare engine name must still resolve too.
+    assert r.get_vector("out").data.tolist() == [0.0, 0.5, 1.0]
+
+
+def test_get_vector_resolves_i_of_source_to_branch_vector():
+    r = _engine_named_result()
+    assert r.get_vector("i(v1)").data.tolist() == [-1e-3, -1e-3, -1e-3]
+    assert r.get_vector("tran1.i(v1)").data.tolist() == [-1e-3, -1e-3, -1e-3]
+
+
+def test_get_vector_unknown_node_still_raises():
+    r = _engine_named_result()
+    with pytest.raises(KeyError):
+        r.get_vector("v(nonexistent)")
+
+
 def test_all_plots_returns_a_copy():
     r = _result()
     r.all_plots().append("mutated")

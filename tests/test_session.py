@@ -101,6 +101,16 @@ def test_tran_vector_shape(session):
     assert not time_vec.is_complex
 
 
+def test_bg_run_resets_cosim_report_flags(session, monkeypatch):
+    # Regression: co-sim failure flags must reset at each run boundary, so a
+    # source that failed on run 1 re-reports on run 2 instead of silently forcing
+    # 0 V/A. Stub command() so this only exercises the reset, not a real sim.
+    session._cosim_reported = {"v": True, "i": True, "s": True}
+    monkeypatch.setattr(session, "command", lambda cmd: None)
+    session.bg_run()
+    assert session._cosim_reported == {"v": False, "i": False, "s": False}
+
+
 def test_ac_complex_vector(session):
     session.load_netlist(RC_NETLIST + [".ac dec 5 10 100k"])
     session.run()

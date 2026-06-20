@@ -250,6 +250,79 @@ def test_compute_fft_unit_sine_near_zero_db():
     assert abs(peak_db) < 1.0  # within 1 dB of 0 dB
 
 
+def test_compute_fft_odd_length_last_bin_full_scale():
+    # Regression: an odd-length rfft has no Nyquist bin, so its final bin has a
+    # negative-frequency partner and must be doubled like every other non-DC bin.
+    # Doubling [1:-1] unconditionally left a full-scale tone landing on the last
+    # bin 6.02 dB low. Place a unit cosine exactly on the last bin (k cycles over
+    # n uniform samples → no leakage) and require ~0 dB, not ~-6 dB.
+    n = 1001  # odd
+    dt = 1e-4
+    x = np.arange(n) * dt
+    k = (n - 1) // 2  # index of the final rfft bin
+    f = k / (n * dt)
+    y = np.cos(2 * np.pi * f * x)
+    _, mag_db = compute_fft(x, y)
+    assert mag_db[-1] == pytest.approx(0.0, abs=0.05)
+
+
+def test_compute_fft_even_length_nyquist_not_doubled():
+    # Complement to the odd-length case: an even-length rfft *does* have a Nyquist
+    # bin (no partner), which must stay un-doubled. A full-scale Nyquist cosine
+    # already reads 0 dB; doubling it would wrongly report +6 dB.
+    n = 1000  # even
+    dt = 1e-4
+    x = np.arange(n) * dt
+    y = np.cos(np.pi * np.arange(n))  # Nyquist: alternating ±1
+    _, mag_db = compute_fft(x, y)
+    assert mag_db[-1] == pytest.approx(0.0, abs=0.05)
+
+
+def test_safe_numpy_blocks_ndarray_constructor():
+    # np.ndarray(shape) allocates just like zeros/empty; the original bypass
+    # reached the unguarded numpy class through __getattr__.
+    from ngspice_ui.models.expr import SAFE_NUMPY
+
+    with pytest.raises(ValueError, match="refusing to allocate"):
+        safe_eval("np.ndarray((10**9,))", _ns(np=SAFE_NUMPY))
+
+
+def test_safe_numpy_blocks_huge_itemsize_dtype():
+    # Small element count, enormous itemsize — caught by the byte-size bound.
+    from ngspice_ui.models.expr import SAFE_NUMPY
+
+    with pytest.raises(ValueError, match="refusing to allocate"):
+        safe_eval("np.zeros(2, dtype='V1000000000')", _ns(np=SAFE_NUMPY))
+
+
+def test_safe_eval_blocks_constant_integer_power_blowup():
+    # Static const-fold guard catches literal/chained huge integer powers (the
+    # path even the co-sim widget's raw-string compile would otherwise hit).
+    with pytest.raises(ValueError, match="oversized integer power"):
+        safe_eval("10**10**9", _ns())
+    with pytest.raises(ValueError, match="oversized integer power"):
+        safe_eval("9**9**9", _ns())
+
+
+def test_validate_expr_blocks_constant_integer_power_blowup():
+    with pytest.raises(ValueError, match="oversized integer power"):
+        validate_expr("10**100000000")
+
+
+def test_safe_eval_blocks_runtime_integer_power_blowup():
+    # Exponent is a literal but the base is computed at runtime, so the static
+    # fold can't see it — the runtime __safe_pow__ transform must still refuse.
+    with pytest.raises(ValueError, match="oversized integer power"):
+        safe_eval("int(max(np.array([10.0])))**100000000", _ns())
+
+
+def test_safe_eval_allows_reasonable_powers():
+    # The guard must not break ordinary exponentiation.
+    assert safe_eval("2**10", _ns()) == 1024
+    assert safe_eval("2.0**0.5", _ns()) == pytest.approx(2**0.5)
+    assert safe_eval("np.sum(np.array([1.0, 2.0]) ** 2)", _ns()) == pytest.approx(5.0)
+
+
 def test_compute_fft_rejects_short_input():
     with pytest.raises(ValueError):
         compute_fft(np.array([0.0, 1.0]), np.array([0.0, 1.0]))

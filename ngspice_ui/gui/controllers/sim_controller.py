@@ -21,7 +21,20 @@ from ngspice_ui.engine.callbacks import (
 )
 from ngspice_ui.engine.session import NgSpiceSession
 
-_ERR_MSG_RE = re.compile(r"\b(?:error|fatal)\b", re.IGNORECASE)
+# What counts as an ngspice error line. Matching the bare word "error" anywhere
+# (the old behaviour) wrongly failed valid runs whose *title* contained it: the
+# title is echoed as ``Circuit: <title>`` (optionally behind a ``stdout``/
+# ``stderr`` stream tag from libngspice), so "Error amplifier test" looked like
+# an error. Real ngspice diagnostics instead lead with ``error``/``fatal`` (e.g.
+# ``Error on line 2``, ``Error: circuit not parsed``) or carry a distinctive
+# abort phrase. Anchoring to the start of the message — after an optional stream
+# tag — excludes the ``Circuit:``-prefixed title echo while still catching every
+# real error, including the co-sim failures the engine reports as ``Error: ...``.
+_ERR_MSG_RE = re.compile(
+    r"^\s*(?:std(?:out|err)\s+)?(?:error|fatal)\b"
+    r"|\b(?:fatal error|simulation (?:interrupted|aborted))\b",
+    re.IGNORECASE,
+)
 _ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
 
 _ANALYSIS_KEYWORDS: frozenset[str] = frozenset(
@@ -60,6 +73,7 @@ class SimController(QObject):
         self._seq_total = 0
         self._seq_index = 0
         self._seq_analysis_line: str | None = None
+        self._seq_base_dir: str | None = None
         self._seq_kind = ""
         self._seq_connected = False
         self._seq_active = False  # False while halted/cancelled so sim_finished won't advance
@@ -89,10 +103,10 @@ class SimController(QObject):
         self._run_errored = False
 
     @Slot(str)
-    def load_netlist(self, text: str) -> None:
+    def load_netlist(self, text: str, base_dir: str | None = None) -> None:
         lines = text.splitlines()
         try:
-            self._session.load_netlist(lines)
+            self._session.load_netlist(lines, base_dir=base_dir)
             self.output_line.emit("-- netlist loaded --")
         except RuntimeError as exc:
             self.output_line.emit(f"load error: {exc}")
@@ -110,10 +124,12 @@ class SimController(QObject):
         netlist: str,
         analysis_line: str | None,
         extra_lines: list[str] | None = None,
+        base_dir: str | None = None,
     ) -> bool:
         """Load *netlist* text, optionally override its analysis command, then bg_run.
 
         extra_lines: prepended before the first non-title line (e.g. .temp).
+        base_dir: directory for resolving relative ``.include`` / ``.lib`` paths.
 
         Returns True if a background run was actually started. A False return
         means the load or bg_run failed synchronously and no ``sim_finished``
@@ -141,7 +157,7 @@ class SimController(QObject):
             insert_at = 1 if lines else 0
             lines = lines[:insert_at] + list(extra_lines) + lines[insert_at:]
         try:
-            self._session.load_netlist(lines)
+            self._session.load_netlist(lines, base_dir=base_dir)
             self.output_line.emit("-- netlist loaded --")
             if analysis_line:
                 self.output_line.emit(f"-- analysis: {analysis_line} --")
@@ -188,12 +204,13 @@ class SimController(QObject):
         netlists: list[str],
         analysis_line: str | None,
         kind: str = "Run",
+        base_dir: str | None = None,
     ) -> None:
         """Run *netlists* one after another, each as its own bg_run.
 
         Emits ``sequence_progress(index, total, kind)`` before each run and
         ``sequence_finished(total, kind)`` once the queue drains. A no-op for
-        an empty list.
+        an empty list. ``base_dir`` resolves relative includes for every run.
         """
         if not netlists:
             return
@@ -202,19 +219,24 @@ class SimController(QObject):
         self._seq_index = 0
         self._seq_analysis_line = analysis_line
         self._seq_kind = kind
+        self._seq_base_dir = base_dir
         self._seq_active = True
         if not self._seq_connected:
             self.sim_finished.connect(self._seq_on_finished)
             self._seq_connected = True
         self._seq_run_next()
 
-    def run_monte_carlo(self, netlists: list[str], analysis_line: str | None) -> None:
+    def run_monte_carlo(
+        self, netlists: list[str], analysis_line: str | None, base_dir: str | None = None
+    ) -> None:
         """Run Monte Carlo netlists sequentially. See :meth:`run_sequence`."""
-        self.run_sequence(netlists, analysis_line, kind="Monte Carlo")
+        self.run_sequence(netlists, analysis_line, kind="Monte Carlo", base_dir=base_dir)
 
-    def run_param_sweep(self, netlists: list[str], analysis_line: str | None) -> None:
+    def run_param_sweep(
+        self, netlists: list[str], analysis_line: str | None, base_dir: str | None = None
+    ) -> None:
         """Run one netlist per swept value sequentially. See :meth:`run_sequence`."""
-        self.run_sequence(netlists, analysis_line, kind="Sweep")
+        self.run_sequence(netlists, analysis_line, kind="Sweep", base_dir=base_dir)
 
     def _seq_run_next(self) -> None:
         # A run that fails to *start* (load/bg_run error) emits no sim_finished,
@@ -225,7 +247,7 @@ class SimController(QObject):
             text = self._seq_queue.pop(0)
             self._seq_index += 1
             self.sequence_progress.emit(self._seq_index, self._seq_total, self._seq_kind)
-            if self.run_with_analysis(text, self._seq_analysis_line):
+            if self.run_with_analysis(text, self._seq_analysis_line, base_dir=self._seq_base_dir):
                 return  # started; sim_finished will drive the next step
             # else: synchronous failure — keep trying the rest of the queue
         self._seq_finalize()
