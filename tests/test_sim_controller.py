@@ -265,8 +265,10 @@ def test_timestep_too_small_with_nonzero_step_fails_run(qapp):
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
-        CharEvent(line='doAnalyses: TRAN:  Timestep too small; time = 3e-05, timestep = 1.25e-16: '
-                       'trouble with node "p"')
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 3e-05, timestep = 1.25e-16: "
+            'trouble with node "p"'
+        )
     )
     session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
     ctrl._drain_queue()
@@ -281,8 +283,10 @@ def test_zero_timestep_with_named_cause_is_clean_not_failure(qapp):
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
-        CharEvent(line='doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: '
-                       'trouble with node "v1#branch"')
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            'trouble with node "v1#branch"'
+        )
     )
     session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
     ctrl._drain_queue()
@@ -294,8 +298,10 @@ def test_benign_end_of_run_timestep_is_clean_not_failure(qapp):
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
-        CharEvent(line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
-                       "cause unrecorded.")
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            "cause unrecorded."
+        )
     )
     session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
     ctrl._drain_queue()
@@ -336,8 +342,10 @@ def test_benign_timestep_then_hard_error_still_fails(qapp):
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
-        CharEvent(line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
-                       "cause unrecorded.")
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            "cause unrecorded."
+        )
     )
     session.event_queue.put_nowait(CharEvent(line="stderr Error: something fatal"))
     ctrl._drain_queue()
@@ -350,8 +358,10 @@ def test_benign_state_is_cleared_so_next_runs_real_abort_is_caught(qapp):
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
-        CharEvent(line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
-                       "cause unrecorded.")
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            "cause unrecorded."
+        )
     )
     ctrl._drain_queue()
     assert ctrl.last_run_had_errors is False
