@@ -42,6 +42,18 @@ def test_descending_sweep(qapp):
     assert w._values() == ["1000", "750", "500", "250", "0"]
 
 
+def test_list_mode_is_capped(qapp):
+    from ngspice_ui.gui.widgets.param_sweep_widget import _MAX_SWEEP_POINTS
+
+    w = ParamSweepWidget()
+    w._name_edit.setText("rval")
+    w._radio_list.setChecked(True)
+    # A pathologically long list must not queue an unbounded run sequence.
+    w._list_edit.setText(" ".join(str(i) for i in range(_MAX_SWEEP_POINTS + 50)))
+    assert len(w._values()) == _MAX_SWEEP_POINTS
+    assert len(w.build_netlists("* t\nR1 in out {rval}\n.end")) == _MAX_SWEEP_POINTS
+
+
 def test_build_netlists_inserts_param_before_end(qapp):
     w = ParamSweepWidget()
     w._name_edit.setText("rval")

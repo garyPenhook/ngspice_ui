@@ -1,0 +1,21 @@
+BJT Common-Emitter Amplifier
+* Classic single-stage voltage amplifier: voltage-divider bias, collector
+* load RC, emitter degeneration RE bypassed by CE for AC gain. QNPN is a
+* generic, illustrative NPN model (not a specific datasheet part).
+* .ac shows the midband gain and bandwidth; .tran shows a small 1kHz signal.
+Vcc   vcc 0 DC 12
+Vin   in  0 DC 0 AC 1 SIN(0 0.01 1k)
+Cin   in  b  10u
+R1    vcc b  47k
+R2    b   0  10k
+RC    vcc c  2.2k
+RE    e   0  1k
+CE    e   0  100u
+Q1    c   b  e  QNPN
+Cout  c   out 1u
+RL    out 0  100k
+.model QNPN NPN(IS=1e-15 BF=200 VAF=100 RB=10 RC=1 RE=0.5)
+.ac dec 20 1 10meg
+.tran 20u 5m
+.op
+.end

@@ -80,6 +80,37 @@ def test_current_completion_is_not_discarded():
     assert any("failed" in line.lower() for line in mw._console.lines)
 
 
+def test_benign_completion_is_not_failed_and_proceeds_to_snapshot():
+    # A run whose only "abort" is the benign end-of-run zero-step is a clean
+    # completion: no failure, no warning banner — it proceeds to snapshot
+    # results. We stub _snapshot_result to stop right after the error/clean
+    # gate so the heavy plotting/measurement path is not needed.
+    mw = _bare_window(run_epoch=5, project_epoch=5)
+    statuses: list[str] = []
+    mw._set_status = statuses.append  # type: ignore[method-assign]
+
+    class _Ctrl:
+        last_run_had_errors = False
+
+    mw._controller = _Ctrl()  # type: ignore[assignment]
+
+    reached_snapshot = []
+
+    def _stop_at_snapshot():
+        reached_snapshot.append(True)
+        raise RuntimeError("stop")  # sentinel: passed the failure gate cleanly
+
+    mw._snapshot_result = _stop_at_snapshot  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="stop"):
+        mw._on_sim_finished()
+
+    # No failure, no "with warnings" banner, and it proceeded to snapshot.
+    assert not any("failed" in line.lower() for line in mw._console.lines)
+    assert not any("warning" in s.lower() for s in statuses)
+    assert reached_snapshot == [True]
+
+
 def test_invalidate_running_run_bumps_epoch_and_halts():
     mw = MainWindow.__new__(MainWindow)
     mw._project_epoch = 7

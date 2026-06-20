@@ -18,6 +18,10 @@ from PySide6.QtWidgets import (
 
 from ngspice_ui.models.analyses import ANALYSES, ANALYSIS_KEY_ORDER, AnalysisSpec
 
+# Hard cap on temperature points — each value runs as an independent pass, so an
+# unbounded list would queue an unbounded number of simulations.
+_MAX_TEMP_POINTS = 1000
+
 
 class AnalysisPanel(QWidget):
     """Select an analysis type and fill in its parameters.
@@ -144,7 +148,8 @@ class AnalysisPanel(QWidget):
         elif len(temps) > 1:
             # ngspice 46 has no working .step temp; multiple temperatures run as
             # a sequence of independent passes (one .temp each).
-            lines.append(f"# {len(temps)} runs: .temp " + " / ".join(temps))
+            cap = f" (capped at {_MAX_TEMP_POINTS})" if len(temps) >= _MAX_TEMP_POINTS else ""
+            lines.append(f"# {len(temps)} runs{cap}: .temp " + " / ".join(temps))
         main_line = self.get_netlist_line()
         if main_line:
             lines.append(main_line)
@@ -156,7 +161,7 @@ class AnalysisPanel(QWidget):
         if not self._temp_box.isChecked():
             return []
         val = self._temp_edit.text().strip()
-        return val.split() if val else []
+        return val.split()[:_MAX_TEMP_POINTS] if val else []
 
     def _get_widgets(self, key: str) -> dict[str, QWidget]:
         idx = self._combo.currentIndex()

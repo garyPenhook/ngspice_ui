@@ -32,9 +32,34 @@ from ngspice_ui.engine.session import NgSpiceSession
 # real error, including the co-sim failures the engine reports as ``Error: ...``.
 _ERR_MSG_RE = re.compile(
     r"^\s*(?:std(?:out|err)\s+)?(?:error|fatal)\b"
-    r"|\b(?:fatal error|simulation (?:interrupted|aborted))\b",
+    r"|\bfatal error\b"
+    # ngspice prints "run simulation(s) aborted" (note the literal "(s)"); an
+    # earlier "simulation aborted" pattern missed it, so genuine aborts were
+    # never flagged. "interrupted" still covers "Simulation interrupted due to
+    # error!".
+    r"|\bsimulation(?:\(s\))?\s+(?:interrupted|aborted)\b"
+    # "source stepping" is ngspice's last-resort operating-point aid; if it
+    # fails the DC/OP solution never converged. Earlier "Dynamic/true gmin
+    # stepping failed" lines are deliberately NOT matched — gmin stepping can
+    # fail and the run still recover via a later method, so they are not
+    # terminal and would false-positive on solvable circuits.
+    r"|\bsource stepping failed\b",
     re.IGNORECASE,
 )
+# Specifically the "run simulation(s) aborted" / "interrupted" line, used to tell
+# a real abort apart from a benign end-of-run stop or a user-requested halt.
+_ABORT_RE = re.compile(r"\bsimulation(?:\(s\))?\s+(?:interrupted|aborted)\b", re.IGNORECASE)
+# The transient "timestep too small" diagnostic that precedes most aborts. The
+# reliable benign-vs-genuine signal is the *timestep value*, not the trailing
+# cause text: a value of exactly 0 means the solver reached the stop time (or a
+# breakpoint) and had nothing left to integrate — a clean completion with valid
+# data — whereas a tiny but NONZERO value means it kept subdividing the step
+# mid-run and still could not converge, a genuine failure. The cause text is an
+# unreliable discriminator on its own: ngspice emits the benign zero-step case
+# both as ": cause unrecorded" AND as ': trouble with node "..."' depending on
+# the circuit, so keying off "cause unrecorded" alone wrongly fails good runs.
+_TIMESTEP_SMALL_RE = re.compile(r"\btimestep too small\b", re.IGNORECASE)
+_TIMESTEP_VALUE_RE = re.compile(r"\btimestep\s*=\s*([0-9.eE+-]+)", re.IGNORECASE)
 _ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
 
 _ANALYSIS_KEYWORDS: frozenset[str] = frozenset(
@@ -66,6 +91,13 @@ class SimController(QObject):
         self._pending_errors: list[tuple[int, str]] = []
         # True if the current/last run reported an ngspice error via callbacks.
         self._run_errored = False
+        # True once the user explicitly halts, so the "aborted"/"interrupted"
+        # line ngspice then emits is classified as a halt, not a failure.
+        self._run_halted = False
+        # True once a benign end-of-run "timestep too small" (timestep == 0,
+        # i.e. the solver reached the stop time) is seen, so the abort line that
+        # follows is treated as a clean completion rather than a failure.
+        self._run_benign_abort = False
 
         # Sequential bg_run state (driven by sim_finished) shared by Monte Carlo
         # and parametric/temperature sweeps — ngspice 46 has no working .step.
@@ -101,6 +133,8 @@ class SimController(QObject):
         """Reset per-run error tracking before launching a (bg) simulation."""
         self._pending_errors.clear()
         self._run_errored = False
+        self._run_halted = False
+        self._run_benign_abort = False
 
     @Slot(str)
     def load_netlist(self, text: str, base_dir: str | None = None) -> None:
@@ -176,6 +210,9 @@ class SimController(QObject):
 
     @Slot()
     def halt(self) -> None:
+        # Mark the run as user-halted so the abort/interrupt line ngspice emits
+        # while winding down is not misclassified as a failure.
+        self._run_halted = True
         if self._seq_active:
             self._seq_active = False  # cancel pending runs before the finished signal fires
         try:
@@ -311,14 +348,7 @@ class SimController(QObject):
             match event:
                 case CharEvent(line=line):
                     self.output_line.emit(line)
-                    if _ERR_MSG_RE.search(line):
-                        # Any error line marks the run as failed, even when no
-                        # line number is present (e.g. "Error: incomplete netlist").
-                        self._run_errored = True
-                        m = _ERR_LINE_RE.search(line)
-                        if m:
-                            self._pending_errors.append((int(m.group(1)), line))
-                            self.errors_changed.emit(list(self._pending_errors))
+                    self._classify_output_line(line)
                 case StatEvent(message=msg, percent=pct):
                     self.output_line.emit(f"[{pct:3d}%] {msg}")
                     self.progress.emit(pct)
@@ -333,3 +363,74 @@ class SimController(QObject):
                     self.plot_init.emit(e)
         if data_events:
             self.plot_data.emit(data_events)
+
+    def _classify_output_line(self, line: str) -> None:
+        """Update per-run error state from one ngspice output *line*.
+
+        Three outcomes stream through the same callback and must be told apart:
+        a hard failure (results discarded by the caller), a benign end-of-run
+        stop (a clean completion — results kept, no failure), and a user halt
+        (neither). The ``timestep too small`` diagnostic is inspected before the
+        abort line it precedes so that abort can be classified correctly.
+        """
+        if _TIMESTEP_SMALL_RE.search(line):
+            if self._is_benign_timestep(line):
+                # Solver reached the stop time / a breakpoint and took a
+                # zero-length next step — the requested window completed with
+                # valid data. Treat the abort that follows as a clean finish.
+                self._run_benign_abort = True
+            else:
+                # A tiny but nonzero step that still won't converge is a real
+                # mid-run failure.
+                self._mark_errored(line)
+            return
+        if _ERR_MSG_RE.search(line):
+            # A user halt or a benign end-of-run stop produces an abort/interrupt
+            # line that is not a failure; everything else that matches is.
+            if (
+                _ABORT_RE.search(line)
+                and (self._run_halted or self._run_benign_abort)
+                and not self._run_errored
+            ):
+                # Consume the one-shot excuse: it covers exactly the abort line
+                # that the halt / benign stop emits. Clearing it here (rather
+                # than leaving it set until the next _begin_run) means a *later*
+                # real abort on the same run — e.g. after the user resumes a
+                # halted run with bg_resume — is still classified as a failure
+                # instead of being silently masked.
+                self._run_halted = False
+                self._run_benign_abort = False
+                return
+            self._mark_errored(line)
+
+    @staticmethod
+    def _is_benign_timestep(line: str) -> bool:
+        """True only when a "timestep too small" line is provably the benign
+        end-of-run case.
+
+        Keys off the reported timestep value: an explicit ``timestep = 0`` means
+        the solver reached the stop time / a breakpoint with nothing left to
+        integrate (valid data so far). A nonzero value means it kept subdividing
+        mid-run and still could not converge — a real failure. A value we cannot
+        parse (or a line carrying no value at all) is also treated as a failure:
+        ngspice prints "timestep too small ... cause unrecorded" for hard OP/DC
+        and initial-transient failures too, so that text alone is not a safe
+        benign signal. Failing closed here means an ambiguous line can never
+        mask a genuine abort (the cost is only that a malformed-but-benign line
+        is reported as a failure rather than silently kept).
+        """
+        m = _TIMESTEP_VALUE_RE.search(line)
+        if not m:
+            return False
+        try:
+            return float(m.group(1)) == 0.0
+        except ValueError:
+            return False
+
+    def _mark_errored(self, line: str) -> None:
+        """Flag the current run as failed and record any line-numbered error."""
+        self._run_errored = True
+        m = _ERR_LINE_RE.search(line)
+        if m:
+            self._pending_errors.append((int(m.group(1)), line))
+            self.errors_changed.emit(list(self._pending_errors))

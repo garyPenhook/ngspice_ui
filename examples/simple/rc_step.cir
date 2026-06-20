@@ -1,0 +1,8 @@
+RC Step Response (capacitor charging)
+* tau = R*C = 10k * 10nF = 100us. A 0->5V step drives the RC; v(out)
+* rises exponentially toward 5V, reaching ~63% (3.16V) after one tau.
+V1 in 0 PULSE(0 5 0 1n 1n 1 2)
+R1 in out 10k
+C1 out 0 10n
+.tran 1u 500u
+.end

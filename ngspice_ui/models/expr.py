@@ -212,6 +212,39 @@ def _safe_pow(base, exp):
     return base**exp
 
 
+# Cap on the element count of a sequence built by repetition (``[x] * n`` or
+# ``n * [x]``). ``ast.List`` and ``ast.Mult`` are deliberately allowed — the
+# np.interp PWL helper emits inline ``[...]`` arrays — so without this guard a
+# formula like ``[0] * 10**9`` would build a billion-element Python list and
+# exhaust memory even though no numpy allocator (which _SafeNumpy caps) is hit.
+_MAX_SEQ_ELEMENTS = 50_000_000
+
+
+def _safe_mul(a, b):
+    """Runtime ``*`` guard — bounds sequence repetition; numeric mult unaffected.
+
+    Only ``seq * int`` / ``int * seq`` (list/tuple/str/bytes repetition) is
+    constrained; the overwhelmingly common numeric/array multiply falls straight
+    through to ``a * b`` after two cheap isinstance checks.
+    """
+    seq, n = None, None
+    if (
+        isinstance(a, (list, tuple, str, bytes))
+        and isinstance(b, (int, np.integer))
+        and not isinstance(b, bool)
+    ):
+        seq, n = a, int(b)
+    elif (
+        isinstance(b, (list, tuple, str, bytes))
+        and isinstance(a, (int, np.integer))
+        and not isinstance(a, bool)
+    ):
+        seq, n = b, int(a)
+    if seq is not None and n > 0 and len(seq) * n > _MAX_SEQ_ELEMENTS:
+        raise ValueError("refusing to build oversized sequence")
+    return a * b
+
+
 def _const_int(node: ast.AST) -> "int | None":
     """Fold *node* to an int if it is a constant integer arithmetic expression.
 
@@ -259,15 +292,23 @@ def _guard_const_pow(tree: ast.AST) -> None:
             _const_int(node)  # for its overflow side effect; value discarded
 
 
-class _PowGuard(ast.NodeTransformer):
-    """Rewrite ``a ** b`` into ``__safe_pow__(a, b)`` so runtime int powers are
-    bounded even when operands are computed at runtime (e.g. ``int(max(vec))``)."""
+class _RuntimeOpGuard(ast.NodeTransformer):
+    """Rewrite ``a ** b`` → ``__safe_pow__(a, b)`` and ``a * b`` → ``__safe_mul__(a, b)``.
+
+    Routing through these guards bounds runtime integer powers and sequence
+    repetitions even when the operands are computed at runtime (e.g.
+    ``int(max(vec)) ** k`` or ``[0] * int(n)``), which the validate-time
+    constant-fold (:func:`_guard_const_pow`) cannot see.
+    """
+
+    _GUARDS = {ast.Pow: "__safe_pow__", ast.Mult: "__safe_mul__"}
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
         self.generic_visit(node)
-        if isinstance(node.op, ast.Pow):
+        guard = self._GUARDS.get(type(node.op))
+        if guard is not None:
             call = ast.Call(
-                func=ast.Name(id="__safe_pow__", ctx=ast.Load()),
+                func=ast.Name(id=guard, ctx=ast.Load()),
                 args=[node.left, node.right],
                 keywords=[],
             )
@@ -422,6 +463,44 @@ class _SafeNumpy:
         self._check(n, k.get("dtype"))
         return np.linspace(*a, **k)
 
+    @staticmethod
+    def _total_size(arrays) -> int:
+        """Best-effort element count of an iterable of array-likes (0 if opaque)."""
+        try:
+            return sum(int(np.asarray(arr).size) for arr in arrays)
+        except (TypeError, ValueError):
+            return 0
+
+    # Combiners join existing arrays into a larger one. Their inputs are already
+    # bounded by the allocator caps above and by _safe_mul (which stops
+    # ``[small] * huge`` from ever building the input list), but cap the *result*
+    # too so a long literal input list can't slip a giant allocation past them.
+    def concatenate(self, arrays, *a, **k):
+        self._check(self._total_size(arrays))
+        return np.concatenate(arrays, *a, **k)
+
+    def stack(self, arrays, *a, **k):
+        self._check(self._total_size(arrays))
+        return np.stack(arrays, *a, **k)
+
+    def hstack(self, arrays, *a, **k):
+        self._check(self._total_size(arrays))
+        return np.hstack(arrays, *a, **k)
+
+    def vstack(self, arrays, *a, **k):
+        self._check(self._total_size(arrays))
+        return np.vstack(arrays, *a, **k)
+
+    def append(self, arr, values, *a, **k):
+        self._check(int(np.asarray(arr).size) + int(np.asarray(values).size))
+        return np.append(arr, values, *a, **k)
+
+    def outer(self, a_arr, b_arr, *a, **k):
+        # outer(u, v) produces len(u) * len(v) elements — two MAX_ELEMENTS-sized
+        # vectors would otherwise yield a ~2.5e15-element matrix.
+        self._check(int(np.asarray(a_arr).size) * int(np.asarray(b_arr).size))
+        return np.outer(a_arr, b_arr, *a, **k)
+
 
 #: Shared size-capped numpy facade for expression namespaces.
 SAFE_NUMPY = _SafeNumpy()
@@ -435,11 +514,54 @@ def safe_eval(expr: str, ns: dict, extra_names: frozenset[str] = frozenset()) ->
     *extra_names* whitelists additional bound names (e.g. callback parameters).
     """
     tree = validate_expr(expr, extra_names)
-    # Bound runtime integer powers (operands may be computed, e.g. int(max(vec)))
-    # by routing every ``**`` through _safe_pow. The injected name is added to the
-    # eval namespace; it cannot clash with user names (dunder, and user dunders
-    # are already rejected by the validator).
-    tree = _PowGuard().visit(tree)
+    # Bound runtime integer powers and sequence repetitions (operands may be
+    # computed, e.g. int(max(vec))) by routing every ``**`` / ``*`` through the
+    # safe wrappers. The injected names are added to the eval namespace; they
+    # cannot clash with user names (dunder, and user dunders are already rejected
+    # by the validator).
+    tree = _RuntimeOpGuard().visit(tree)
     ast.fix_missing_locations(tree)
     ns.setdefault("__safe_pow__", _safe_pow)
+    ns.setdefault("__safe_mul__", _safe_mul)
     return eval(compile(tree, "<expr>", "eval"), ns)  # noqa: S307
+
+
+def compile_lambda(
+    expr: str,
+    arg_names: tuple[str, ...],
+    ns: dict,
+    extra_names: frozenset[str] = frozenset(),
+):
+    """Compile *expr* into a callable of *arg_names* under the full sandbox.
+
+    Callers that need to evaluate one expression repeatedly (e.g. a co-sim
+    source driven once per timestep) should use this rather than compiling the
+    raw source string: it applies the same AST allowlist *and* the runtime
+    ``**`` / ``*`` guards as :func:`safe_eval`, so callbacks built from computed
+    operands cannot hang the app or exhaust memory.
+
+    *ns* supplies the global names the body resolves against (np, math, …); a
+    copy is taken so the caller's dict is never mutated. Raises ValueError /
+    SyntaxError for any disallowed construct.
+    """
+    tree = validate_expr(expr, frozenset(arg_names) | extra_names)
+    lam = ast.Expression(
+        body=ast.Lambda(
+            args=ast.arguments(
+                posonlyargs=[],
+                args=[ast.arg(arg=n) for n in arg_names],
+                vararg=None,
+                kwonlyargs=[],
+                kw_defaults=[],
+                kwarg=None,
+                defaults=[],
+            ),
+            body=tree.body,
+        )
+    )
+    lam = _RuntimeOpGuard().visit(lam)
+    ast.fix_missing_locations(lam)
+    ns = dict(ns)
+    ns.setdefault("__safe_pow__", _safe_pow)
+    ns.setdefault("__safe_mul__", _safe_mul)
+    return eval(compile(lam, "<expr>", "eval"), ns)  # noqa: S307

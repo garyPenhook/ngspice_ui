@@ -249,6 +249,171 @@ def test_warning_line_does_not_fail_run(qapp):
     assert ctrl.last_run_had_errors is False
 
 
+def test_real_simulation_aborted_line_marks_run_failed(qapp):
+    # ngspice prints "run simulation(s) aborted" (note the "(s)"); the old
+    # pattern matched only "simulation aborted", so real aborts slipped through.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_timestep_too_small_with_nonzero_step_fails_run(qapp):
+    # A genuine mid-run convergence failure: tiny but NONZERO step, time well
+    # below tstop, named cause.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 3e-05, timestep = 1.25e-16: "
+            'trouble with node "p"'
+        )
+    )
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_zero_timestep_with_named_cause_is_clean_not_failure(qapp):
+    # Regression: the end-of-run zero-step (timestep = 0 at tstop) is a clean
+    # completion even when ngspice attributes a node ("trouble with node ...") —
+    # keying off the cause text alone wrongly discarded valid data (e.g. the
+    # half-wave rectifier example, which reached tstop with full data).
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            'trouble with node "v1#branch"'
+        )
+    )
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+
+
+def test_benign_end_of_run_timestep_is_clean_not_failure(qapp):
+    # "cause unrecorded" zero-step at the stop time is a clean completion.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            "cause unrecorded."
+        )
+    )
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+
+
+def test_source_stepping_failure_marks_run_failed(qapp):
+    # Terminal operating-point non-convergence (singular matrix circuits).
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(CharEvent(line="Warning: source stepping failed"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_recoverable_gmin_stepping_does_not_fail_run(qapp):
+    # Dynamic-gmin stepping can fail and the run still converge via another
+    # method, so that line alone must not flag the run.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(CharEvent(line="Warning: Dynamic gmin stepping failed"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+
+
+def test_user_halt_abort_line_is_not_a_failure(qapp):
+    # After an explicit halt, ngspice's "aborted" line must not read as a failure.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    ctrl.halt()
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+
+
+def test_benign_timestep_then_hard_error_still_fails(qapp):
+    # A benign zero-step followed by a real error in a later analysis must fail.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            "cause unrecorded."
+        )
+    )
+    session.event_queue.put_nowait(CharEvent(line="stderr Error: something fatal"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_benign_state_is_cleared_so_next_runs_real_abort_is_caught(qapp):
+    # The benign-abort suppression is per-run: a bare abort in a later run (no
+    # preceding benign zero-step) must still fail.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(
+            line="doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: "
+            "cause unrecorded."
+        )
+    )
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+    ctrl.run()  # _begin_run resets per-run state
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_halt_flag_is_cleared_so_next_runs_real_abort_is_caught(qapp):
+    # Guards the stale-flag risk: a halt must not suppress a *later* run's abort.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    ctrl.halt()
+    ctrl.run()  # _begin_run must clear _run_halted
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_resumed_run_real_abort_is_caught_after_halt(qapp):
+    # P2: bg_resume continues the SAME run, so there is no _begin_run reset to
+    # clear the halt excuse. The excuse must be consumed when the halt's own
+    # abort line is seen, so a genuine abort on the resumed run still fails.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    ctrl.halt()
+    # The halt's wind-down abort is excused — and that consumes the excuse.
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+    ctrl.resume()  # same run continues; no per-run state reset
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_timestep_too_small_without_parseable_value_fails(qapp):
+    # P1: ngspice also prints "timestep too small ... cause unrecorded" for hard
+    # OP/DC failures. Without a parseable "timestep = 0", the line is NOT the
+    # benign end-of-run case and must be treated as a failure rather than masking
+    # the abort that follows.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(line="doAnalyses: TRAN:  Timestep too small: cause unrecorded.")
+    )
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
 def test_completion_not_starved_by_data_backlog(qapp):
     ctrl, session = _make_controller()
     finished: list[int] = []

@@ -1,0 +1,19 @@
+Astable Multivibrator (free-running BJT oscillator)
+* Two cross-coupled NPN stages alternately switch, producing a square wave at
+* c1/c2 with period ~1.4*R*C. The 10n/10.5n cap asymmetry guarantees the
+* circuit self-starts in simulation. QN is a generic, illustrative NPN model.
+* Nonlinear, time-domain example -- run as a transient with UIC. The window is
+* kept short: each regenerative switching edge needs very fine timesteps, so a
+* long run produces a huge number of points.
+Vcc vcc 0 DC 5
+RC1 vcc c1 1k
+RC2 vcc c2 1k
+RB1 vcc b1 47k
+RB2 vcc b2 47k
+C1  c1 b2 10n
+C2  c2 b1 10.5n
+Q1  c1 b1 0 QN
+Q2  c2 b2 0 QN
+.model QN NPN(IS=1e-15 BF=150)
+.tran 2u 1m uic
+.end

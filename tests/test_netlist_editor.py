@@ -8,13 +8,22 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from ngspice_ui.gui.widgets.netlist_editor import NetlistEditor  # noqa: E402
+from ngspice_ui.gui.widgets.netlist_editor import _INCLUDE_RE, NetlistEditor  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+def test_include_resolver_recognises_all_directives():
+    # Ctrl+click navigation must resolve .include, .inc, and .lib alike — the
+    # engine rewrites and the linter validates all three.
+    for directive in (".include", ".inc", ".lib"):
+        m = _INCLUDE_RE.match(f'{directive} "models.inc"')
+        assert m is not None, directive
+        assert m.group(1) == "models.inc", directive
 
 
 def test_regex_replace_all_matches_pattern(qapp):

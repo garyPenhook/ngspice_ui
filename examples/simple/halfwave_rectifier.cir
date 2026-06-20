@@ -1,0 +1,9 @@
+Half-Wave Rectifier
+* A diode passes only the positive half-cycles of a 5V/1kHz sine to the load.
+* DMOD is a generic, illustrative diode model (not a specific datasheet part).
+V1 in 0 SIN(0 5 1k)
+D1 in out DMOD
+R1 out 0 10k
+.model DMOD D(IS=1e-14 N=1 RS=0.5)
+.tran 10u 3m
+.end
