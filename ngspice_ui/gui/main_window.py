@@ -54,6 +54,13 @@ class MainWindow(MainWindowUI, QMainWindow):
         self._sim_halted = False
         self._current_project_path: Path | None = None
         self._sim_start_time: float = 0.0
+        # Monotonic counter bumped whenever a new project context is established
+        # (open / new / load). A run records the epoch it started under; a
+        # completion that arrives after the epoch moved on belongs to a circuit
+        # the user has navigated away from and must not be applied to the new
+        # project. See _invalidate_running_run / _on_sim_finished.
+        self._project_epoch = 0
+        self._run_epoch = -1
 
         self._controller = SimController(parent=self)
         self._create_actions()
@@ -133,6 +140,32 @@ class MainWindow(MainWindowUI, QMainWindow):
     # File: new / open
     # ------------------------------------------------------------------
 
+    def _invalidate_running_run(self) -> None:
+        """Sever any in-flight run from the project context being replaced.
+
+        Establishing a new project (open / new / load) swaps the netlist,
+        analysis and measurements. A simulation still running — or whose
+        completion event is already queued — belongs to the *old* circuit;
+        bumping the epoch makes :meth:`_on_sim_finished` discard that stale
+        completion instead of snapshotting it and evaluating the new project's
+        measurements against the old run's data. The old run is also halted so it
+        stops computing against a circuit the user has navigated away from.
+        """
+        self._project_epoch += 1
+        if self._controller.session.is_running:
+            self._sim_halted = False  # abandoned, not a user-initiated pause
+            self._controller.halt()
+
+    def _deck_base_dir(self) -> str | None:
+        """Directory for resolving the deck's relative ``.include`` / ``.lib``.
+
+        Only meaningful for a netlist opened from disk; imported schematics and
+        loaded projects have no on-disk netlist path, so includes (if any) are
+        left to resolve against the engine default.
+        """
+        path = self._editor.current_path
+        return str(path.parent) if path else None
+
     def _reset_project_state(self) -> None:
         """Reset all project widgets to empty defaults.
 
@@ -140,6 +173,7 @@ class MainWindow(MainWindowUI, QMainWindow):
         callbacks, so a previous project's source functions cannot leak into the
         circuit that's about to be loaded.
         """
+        self._invalidate_running_run()
         empty = ProjectDocument()
         self._analysis_panel.set_config(empty.analysis)
         self._measurements.set_config(empty.measurements)
@@ -330,6 +364,10 @@ class MainWindow(MainWindowUI, QMainWindow):
         except ProjectError as exc:
             QMessageBox.critical(self, "Load Project Error", str(exc))
             return
+        # Loading a project does not go through _reset_project_state, so bump the
+        # epoch here too — otherwise a still-running prior run's completion would
+        # be applied to the freshly loaded project.
+        self._invalidate_running_run()
         self._editor.set_content(doc.netlist, path=None)
         self._analysis_panel.set_config(doc.analysis)
         self._measurements.set_config(doc.measurements)
@@ -398,6 +436,8 @@ class MainWindow(MainWindowUI, QMainWindow):
             QMessageBox.warning(self, "Analysis Setup", "\n".join(errors))
             return
         self._sim_halted = False
+        self._run_epoch = self._project_epoch
+        base_dir = self._deck_base_dir()
         analysis_line = self._analysis_panel.get_netlist_line()
         temps = self._analysis_panel.get_temperatures()
         self._monte_carlo.set_netlist(text)
@@ -407,10 +447,14 @@ class MainWindow(MainWindowUI, QMainWindow):
 
             netlists = [insert_before_end(text, f".temp {t}") for t in temps]
             self._console.append_line(f"Temperature sweep: {len(temps)} runs queued")
-            self._controller.run_sequence(netlists, analysis_line, kind="Temp sweep")
+            self._controller.run_sequence(
+                netlists, analysis_line, kind="Temp sweep", base_dir=base_dir
+            )
         else:
             extra = [f".temp {temps[0]}"] if temps else None
-            self._controller.run_with_analysis(text, analysis_line, extra_lines=extra)
+            self._controller.run_with_analysis(
+                text, analysis_line, extra_lines=extra, base_dir=base_dir
+            )
 
     @Slot()
     def _stop(self) -> None:
@@ -506,8 +550,9 @@ class MainWindow(MainWindowUI, QMainWindow):
             QMessageBox.warning(self, "Param Sweep", "Nothing to sweep — check the values.")
             return
         analysis_line = self._analysis_panel.get_netlist_line()
+        self._run_epoch = self._project_epoch
         self._console.append_line(f"Parametric sweep: {len(netlists)} runs queued")
-        self._controller.run_param_sweep(netlists, analysis_line)
+        self._controller.run_param_sweep(netlists, analysis_line, base_dir=self._deck_base_dir())
 
     # ------------------------------------------------------------------
     # Monte Carlo — sequencing lives in the coordinator; we only echo status
@@ -518,8 +563,9 @@ class MainWindow(MainWindowUI, QMainWindow):
         if not netlists:
             return
         analysis_line = self._analysis_panel.get_netlist_line()
+        self._run_epoch = self._project_epoch
         self._console.append_line(f"Monte Carlo: {len(netlists)} runs queued")
-        self._controller.run_monte_carlo(netlists, analysis_line)
+        self._controller.run_monte_carlo(netlists, analysis_line, base_dir=self._deck_base_dir())
 
     @Slot(int, int, str)
     def _on_sequence_progress(self, index: int, total: int, kind: str) -> None:
@@ -635,6 +681,17 @@ class MainWindow(MainWindowUI, QMainWindow):
         self._act_run.setEnabled(True)
         self._act_stop.setEnabled(False)
         self._progress.setVisible(False)
+
+        # Stale completion: the project context changed (open / new / load)
+        # after this run started, so its data belongs to a circuit that is no
+        # longer loaded. Restore the idle toolbar but do not snapshot it or
+        # evaluate the new project's measurements against it.
+        if self._run_epoch != self._project_epoch:
+            self._act_resume.setEnabled(False)
+            self._sim_halted = False
+            self._console.append_line("-- previous run discarded (project changed) --")
+            return
+
         if self._sim_halted:
             self._act_resume.setEnabled(True)
             self._set_status(f"Halted  ({elapsed:.2f} s)")

@@ -180,6 +180,101 @@ _SAFE_NODES = (
 )
 
 
+# Cap on the decimal-digit length of any integer power. Real measurement /
+# co-sim formulas never need astronomically large integers; an attacker-supplied
+# ``9**9**9`` or ``10**100000000`` otherwise burns CPU and memory building a
+# multi-megabyte/gigabyte Python int even though no array is allocated. ~4096
+# digits is far above any legitimate use yet trivially cheap.
+_MAX_POW_RESULT_DIGITS = 4096
+
+
+def _pow_too_large(base: int, exp: int) -> bool:
+    """True if ``base ** exp`` would exceed the integer-power digit cap."""
+    if exp <= 0 or abs(base) <= 1:
+        return False  # |result| <= 1, or a fraction/1 — never large
+    return exp * math.log10(abs(base)) > _MAX_POW_RESULT_DIGITS
+
+
+def _safe_pow(base, exp):
+    """Runtime ``**`` guard — only constrains the int**int case that can blow up.
+
+    Float/array powers cannot exhaust memory (they saturate to ``inf``), so they
+    pass straight through; only an oversized *integer* power is refused.
+    """
+    if (
+        isinstance(base, (int, np.integer))
+        and isinstance(exp, (int, np.integer))
+        and not isinstance(base, bool)
+        and not isinstance(exp, bool)
+        and _pow_too_large(int(base), int(exp))
+    ):
+        raise ValueError("refusing to evaluate oversized integer power")
+    return base**exp
+
+
+def _const_int(node: ast.AST) -> "int | None":
+    """Fold *node* to an int if it is a constant integer arithmetic expression.
+
+    Returns None for anything involving names/calls/floats (i.e. runtime values).
+    Raises ValueError if a constant integer power along the way would be
+    oversized — caught *before* the huge int is ever materialised, which also
+    covers chained literals like ``9**9**9`` (folded bottom-up).
+    """
+    if isinstance(node, ast.Constant):
+        v = node.value
+        return v if (isinstance(v, int) and not isinstance(v, bool)) else None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        v = _const_int(node.operand)
+        if v is None:
+            return None
+        return -v if isinstance(node.op, ast.USub) else v
+    if isinstance(node, ast.BinOp):
+        left, right = _const_int(node.left), _const_int(node.right)
+        if left is None or right is None:
+            return None
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Pow):
+            if _pow_too_large(left, right):
+                raise ValueError("refusing to evaluate oversized integer power")
+            return left**right
+        return None  # Div/Mod/etc. — not folded
+    return None
+
+
+def _guard_const_pow(tree: ast.AST) -> None:
+    """Reject constant integer powers whose result would be oversized.
+
+    Walks every ``**`` node and folds its operands; ``_const_int`` raises if a
+    fold would overflow the digit cap. Catches the literal/constant cases that
+    are evaluated even by callers (e.g. the co-sim widget) which compile the raw
+    source string rather than going through :func:`safe_eval`'s runtime guard.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            _const_int(node)  # for its overflow side effect; value discarded
+
+
+class _PowGuard(ast.NodeTransformer):
+    """Rewrite ``a ** b`` into ``__safe_pow__(a, b)`` so runtime int powers are
+    bounded even when operands are computed at runtime (e.g. ``int(max(vec))``)."""
+
+    def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        self.generic_visit(node)
+        if isinstance(node.op, ast.Pow):
+            call = ast.Call(
+                func=ast.Name(id="__safe_pow__", ctx=ast.Load()),
+                args=[node.left, node.right],
+                keywords=[],
+            )
+            return ast.copy_location(call, node)
+        return node
+
+
 def _validate(node: ast.AST, allowed: frozenset[str]) -> None:
     if isinstance(node, ast.Name):
         if node.id not in allowed:
@@ -215,6 +310,7 @@ def validate_expr(expr: str, extra_names: frozenset[str] = frozenset()) -> ast.E
     """
     tree = ast.parse(expr, mode="eval")
     _validate(tree, _WHITELISTED_NAMES | extra_names)
+    _guard_const_pow(tree)
     return tree
 
 
@@ -234,16 +330,30 @@ class _SafeNumpy:
 
     #: Upper bound on elements any single allocator may produce (~400 MB float64).
     MAX_ELEMENTS = 50_000_000
+    #: Upper bound on *bytes* — element count alone is bypassable via a huge
+    #: itemsize (e.g. ``dtype='V1000000000'`` makes 2 elements ~2 GB).
+    MAX_BYTES = MAX_ELEMENTS * 8
 
     def __getattr__(self, name: str):
         # Anything not overridden below is the real numpy attribute.
         return getattr(np, name)
 
-    def _check(self, n: int) -> None:
+    def _check(self, n: int, dtype=None) -> None:
         if n > self.MAX_ELEMENTS:
             raise ValueError(
                 f"refusing to allocate array of {n} elements (limit {self.MAX_ELEMENTS})"
             )
+        # Element count is not enough: a small count with an enormous itemsize
+        # still exhausts memory, so bound the total byte size too.
+        if dtype is not None:
+            try:
+                itemsize = np.dtype(dtype).itemsize
+            except TypeError:
+                itemsize = 8
+            if n * itemsize > self.MAX_BYTES:
+                raise ValueError(
+                    f"refusing to allocate {n * itemsize} bytes (limit {self.MAX_BYTES})"
+                )
 
     @staticmethod
     def _count(shape) -> int:
@@ -258,20 +368,30 @@ class _SafeNumpy:
             return 0
 
     def zeros(self, shape, *a, **k):
-        self._check(self._count(shape))
+        # np.zeros(shape, dtype=float, ...) — dtype is the first positional.
+        self._check(self._count(shape), a[0] if a else k.get("dtype"))
         return np.zeros(shape, *a, **k)
 
     def ones(self, shape, *a, **k):
-        self._check(self._count(shape))
+        self._check(self._count(shape), a[0] if a else k.get("dtype"))
         return np.ones(shape, *a, **k)
 
     def empty(self, shape, *a, **k):
-        self._check(self._count(shape))
+        self._check(self._count(shape), a[0] if a else k.get("dtype"))
         return np.empty(shape, *a, **k)
 
     def full(self, shape, *a, **k):
-        self._check(self._count(shape))
+        # np.full(shape, fill_value, dtype=None, ...) — dtype is the 2nd positional.
+        self._check(self._count(shape), a[1] if len(a) >= 2 else k.get("dtype"))
         return np.full(shape, *a, **k)
+
+    def ndarray(self, shape, *a, **k):
+        # np.ndarray(shape, dtype=float, ...) constructs an *uninitialised* array
+        # of the given shape — every bit as memory-hungry as zeros/empty, and the
+        # original audit bypass (np.ndarray((10**9,))) went straight to numpy
+        # because __getattr__ returned the unguarded class.
+        self._check(self._count(shape), a[0] if a else k.get("dtype"))
+        return np.ndarray(shape, *a, **k)
 
     def arange(self, *a, **k):
         if len(a) == 1:
@@ -284,7 +404,7 @@ class _SafeNumpy:
             n = max(0, math.ceil((float(stop) - float(start)) / float(step)))
         except (TypeError, ValueError, ZeroDivisionError):
             n = 0
-        self._check(n)
+        self._check(n, k.get("dtype"))
         return np.arange(*a, **k)
 
     def linspace(self, *a, **k):
@@ -299,7 +419,7 @@ class _SafeNumpy:
             n = 0
         # _check() must run *outside* the conversion try/except, or its
         # "refusing to allocate" ValueError would be swallowed here.
-        self._check(n)
+        self._check(n, k.get("dtype"))
         return np.linspace(*a, **k)
 
 
@@ -315,4 +435,11 @@ def safe_eval(expr: str, ns: dict, extra_names: frozenset[str] = frozenset()) ->
     *extra_names* whitelists additional bound names (e.g. callback parameters).
     """
     tree = validate_expr(expr, extra_names)
+    # Bound runtime integer powers (operands may be computed, e.g. int(max(vec)))
+    # by routing every ``**`` through _safe_pow. The injected name is added to the
+    # eval namespace; it cannot clash with user names (dunder, and user dunders
+    # are already rejected by the validator).
+    tree = _PowGuard().visit(tree)
+    ast.fix_missing_locations(tree)
+    ns.setdefault("__safe_pow__", _safe_pow)
     return eval(compile(tree, "<expr>", "eval"), ns)  # noqa: S307

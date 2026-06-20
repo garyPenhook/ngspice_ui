@@ -31,10 +31,18 @@ def compute_fft(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     dt = (t1 - t0) / (n - 1)
     freqs = np.fft.rfftfreq(n, d=dt)
     spectrum = np.fft.rfft(y_uniform)
-    # Single-sided amplitude: divide by n then double non-DC non-Nyquist bins
-    # so that a unit-amplitude sine reads ≈ 0 dB.
+    # Single-sided amplitude: divide by n then double the bins that have a
+    # mirror-image negative-frequency partner so a unit-amplitude sine reads
+    # ≈ 0 dB. The DC bin (index 0) is never doubled. A Nyquist bin exists only
+    # for *even*-length inputs (at the final index) and must also stay
+    # un-doubled; an odd-length rfft has no Nyquist bin, so its final bin *does*
+    # have a partner and must be doubled. Doubling [1:-1] unconditionally left
+    # the last bin of every odd-length FFT 6.02 dB low.
     mag = np.abs(spectrum) / n
-    mag[1:-1] *= 2
+    if n % 2 == 0:
+        mag[1:-1] *= 2  # even length: exclude DC (0) and Nyquist (last)
+    else:
+        mag[1:] *= 2  # odd length: exclude DC only — no Nyquist bin
     mag_db = 20.0 * np.log10(mag + 1e-300)
     # Drop DC bin (index 0)
     return freqs[1:], mag_db[1:]

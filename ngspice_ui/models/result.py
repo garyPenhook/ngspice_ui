@@ -13,9 +13,17 @@ treat a result and a session interchangeably for read-only access.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from ngspice_ui.engine.session import VectorData
+
+# Matches a function-style vector reference such as ``v(out)`` or ``i(v1)``.
+# ngspice's vector lister reports node voltages under the bare node name
+# (``out``) and source/inductor currents as ``v1#branch``, but measurements,
+# probes, and derived traces request them in SPICE access syntax ``v(out)`` /
+# ``i(v1)``.  This bridges the two naming conventions.
+_FUNC_REF_RE = re.compile(r"^\s*([vi])\s*\(\s*(.+?)\s*\)\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -40,18 +48,54 @@ class SimulationResult:
         return list(self.plots.get(plot, []))
 
     def get_vector(self, vecname: str) -> VectorData:
-        """Resolve a vector by fully-qualified ``plot.vec`` or bare ``vec`` name.
+        """Resolve a vector by ``plot.vec`` / bare ``vec`` / ``v(node)`` / ``i(src)``.
 
-        A bare name resolves against :attr:`current_plot_name`, matching how
-        ngspice resolves unqualified vectors in the current plot.
+        Three naming conventions must all resolve against the snapshot, whose
+        keys are ``"<plot>.<engine-name>"`` (the engine reports node voltages as
+        the bare node name and source currents as ``<src>#branch``):
+
+        * fully-qualified ``tran1.out`` / ``tran1.v(out)``
+        * bare ``out`` / ``v(out)`` against :attr:`current_plot_name`
+        * SPICE access syntax ``v(out)`` → engine ``out``; ``i(v1)`` → ``v1#branch``
+
+        Without this, documented measurements/probes that request ``v(out)`` (the
+        natural SPICE spelling) failed even though the data was present under
+        ``out``.
         """
-        if vecname in self.vectors:
-            return self.vectors[vecname]
-        if "." not in vecname and self.current_plot_name:
-            qualified = f"{self.current_plot_name}.{vecname}"
-            if qualified in self.vectors:
-                return self.vectors[qualified]
+        for key in self._candidate_keys(vecname):
+            if key in self.vectors:
+                return self.vectors[key]
         raise KeyError(f"Vector not found: {vecname!r}")
+
+    def _candidate_keys(self, vecname: str):
+        """Yield snapshot keys to try for *vecname*, most-specific first."""
+        # (plot, leaf) pairs: an explicit, recognised plot prefix; the current
+        # plot; and the raw name as a final fallback (already-qualified keys).
+        pairs: list[tuple[str | None, str]] = []
+        head, _, rest = vecname.partition(".")
+        if rest and head in self.plots:
+            pairs.append((head, rest))
+        if self.current_plot_name:
+            pairs.append((self.current_plot_name, vecname))
+        pairs.append((None, vecname))
+
+        for plot, leaf in pairs:
+            for leaf_cand in self._expand_leaf(leaf):
+                yield f"{plot}.{leaf_cand}" if plot else leaf_cand
+
+    @staticmethod
+    def _expand_leaf(name: str) -> list[str]:
+        """Expand a leaf name to candidate engine names (unwrapping v()/i())."""
+        cands = [name]
+        m = _FUNC_REF_RE.match(name)
+        if m:
+            fn, inner = m.group(1).lower(), m.group(2)
+            if fn == "v":
+                cands.append(inner)  # v(out) -> out
+            else:
+                cands.append(f"{inner}#branch")  # i(v1) -> v1#branch
+                cands.append(inner)
+        return cands
 
     # -- construction --------------------------------------------------------
 

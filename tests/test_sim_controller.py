@@ -33,7 +33,7 @@ class FakeSession:
         self.loaded: list[list[str]] = []
         self.run_count = 0
 
-    def load_netlist(self, lines):
+    def load_netlist(self, lines, base_dir=None):
         self.loaded.append(list(lines))
 
     def bg_run(self):
@@ -142,8 +142,8 @@ def test_sequence_does_not_hang_when_a_run_fails_to_start(qapp):
             super().__init__()
             self._fail_on = fail_on
 
-        def load_netlist(self, lines):
-            super().load_netlist(lines)
+        def load_netlist(self, lines, base_dir=None):
+            super().load_netlist(lines, base_dir)
             # Second netlist fails to load (e.g. ngSpice_Circ error).
             if len(self.loaded) == self._fail_on:
                 raise RuntimeError("synthetic load failure")
@@ -168,8 +168,8 @@ def test_sequence_does_not_hang_when_a_run_fails_to_start(qapp):
 
 def test_sequence_completes_when_every_run_fails_to_start(qapp):
     class AlwaysFailSession(FakeSession):
-        def load_netlist(self, lines):
-            super().load_netlist(lines)
+        def load_netlist(self, lines, base_dir=None):
+            super().load_netlist(lines, base_dir)
             raise RuntimeError("synthetic load failure")
 
     session = AlwaysFailSession()
@@ -211,6 +211,42 @@ def test_error_line_marks_run_failed(qapp):
     session.event_queue.put_nowait(CharEvent(line="Error: incomplete or empty netlist"))
     ctrl._drain_queue()
     assert ctrl.last_run_had_errors is True
+
+
+def test_title_containing_error_does_not_fail_run(qapp):
+    # Regression: a valid circuit titled "Error amplifier test" is echoed by
+    # libngspice as "Circuit: error amplifier test" (here behind a stdout tag).
+    # The word "error" mid-line must no longer flag the run as failed.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(CharEvent(line="stdout Circuit: error amplifier test"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+
+
+def test_real_stderr_error_still_marks_run_failed(qapp):
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(CharEvent(line="stderr Error on line 2 or its substitute:"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_simulation_interrupted_phrase_marks_run_failed(qapp):
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(CharEvent(line="stderr Simulation interrupted due to error!"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_warning_line_does_not_fail_run(qapp):
+    # ngspice warnings go to stderr too but are not errors.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(CharEvent(line="stderr warning, can't find model 'x' from line"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
 
 
 def test_completion_not_starved_by_data_backlog(qapp):
