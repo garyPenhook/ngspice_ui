@@ -259,18 +259,36 @@ def test_real_simulation_aborted_line_marks_run_failed(qapp):
     assert ctrl.last_run_had_errors is True
 
 
-def test_timestep_too_small_with_named_cause_fails_run(qapp):
-    # A genuine convergence failure names the offending node.
+def test_timestep_too_small_with_nonzero_step_fails_run(qapp):
+    # A genuine mid-run convergence failure: tiny but NONZERO step, time well
+    # below tstop, named cause.
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
-        CharEvent(line='doAnalyses: TRAN:  Timestep too small; time = 3e-05, timestep = 1e-16: '
+        CharEvent(line='doAnalyses: TRAN:  Timestep too small; time = 3e-05, timestep = 1.25e-16: '
                        'trouble with node "p"')
     )
     session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
     ctrl._drain_queue()
     assert ctrl.last_run_had_errors is True
     assert ctrl.last_run_warning is None
+
+
+def test_zero_timestep_with_named_cause_is_benign_not_failure(qapp):
+    # Regression: the end-of-run zero-step (timestep = 0 at tstop) is benign
+    # even when ngspice attributes a node ("trouble with node ...") — keying off
+    # the cause text alone wrongly discarded valid data (e.g. the half-wave
+    # rectifier example, which reached tstop with full data).
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(line='doAnalyses: TRAN:  Timestep too small; time = 0.003, timestep = 0: '
+                       'trouble with node "v1#branch"')
+    )
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+    assert ctrl.last_run_warning is not None
 
 
 def test_benign_end_of_run_timestep_is_warning_not_failure(qapp):

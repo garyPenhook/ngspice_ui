@@ -49,12 +49,18 @@ _ERR_MSG_RE = re.compile(
 # Specifically the "run simulation(s) aborted" / "interrupted" line, used to tell
 # a real abort apart from a benign end-of-run stop or a user-requested halt.
 _ABORT_RE = re.compile(r"\bsimulation(?:\(s\))?\s+(?:interrupted|aborted)\b", re.IGNORECASE)
-# The transient "timestep too small" diagnostic that precedes most aborts.
-# ngspice appends a named cause ("...: trouble with node \"p\"") for a genuine
-# convergence failure, or ": cause unrecorded" for the benign case where the
-# solver merely reached the stop time and computed a zero next step — that one
-# leaves valid data and is downgraded to a warning rather than a failure.
+# The transient "timestep too small" diagnostic that precedes most aborts. The
+# reliable benign-vs-genuine signal is the *timestep value*, not the trailing
+# cause text: a value of exactly 0 means the solver reached the stop time (or a
+# breakpoint) and had nothing left to integrate — valid data, downgrade to a
+# warning — whereas a tiny but NONZERO value means it kept subdividing the step
+# mid-run and still could not converge, a genuine failure. The cause text is an
+# unreliable discriminator on its own: ngspice emits the benign zero-step case
+# both as ": cause unrecorded" AND as ': trouble with node "..."' depending on
+# the circuit, so keying off "cause unrecorded" alone wrongly fails good runs.
 _TIMESTEP_SMALL_RE = re.compile(r"\btimestep too small\b", re.IGNORECASE)
+_TIMESTEP_VALUE_RE = re.compile(r"\btimestep\s*=\s*([0-9.eE+-]+)", re.IGNORECASE)
+# Fallback only, when the timestep value cannot be parsed from the line.
 _CAUSE_UNRECORDED_RE = re.compile(r"\bcause unrecorded\b", re.IGNORECASE)
 _ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
 
@@ -384,17 +390,19 @@ class SimController(QObject):
         abort line it precedes so the abort can be downgraded when appropriate.
         """
         if _TIMESTEP_SMALL_RE.search(line):
-            if _CAUSE_UNRECORDED_RE.search(line):
-                # Benign: solver reached the stop time and took a zero-length
-                # final step. Data up to that point is valid — keep it, warn.
+            if self._is_benign_timestep(line):
+                # Solver reached the stop time / a breakpoint and took a
+                # zero-length next step. Data up to that point is valid — keep
+                # it, warn.
                 self._run_benign_abort = True
                 if not self._run_errored:
                     self._run_warning = (
-                        "transient stopped at end of run (timestep too small, "
-                        "cause unrecorded); results may be incomplete"
+                        "transient stopped early (timestep too small at end of "
+                        "run); results may be incomplete"
                     )
             else:
-                # A named cause ("trouble with node ...") is a real failure.
+                # A tiny but nonzero step that still won't converge is a real
+                # mid-run failure.
                 self._mark_errored(line)
             return
         if _ERR_MSG_RE.search(line):
@@ -407,6 +415,25 @@ class SimController(QObject):
             ):
                 return
             self._mark_errored(line)
+
+    @staticmethod
+    def _is_benign_timestep(line: str) -> bool:
+        """True if a "timestep too small" line is the benign end-of-run case.
+
+        Keys off the reported timestep value: exactly 0 means the solver reached
+        the stop time / a breakpoint with nothing left to integrate (valid data
+        so far). A nonzero value means it kept subdividing mid-run and still
+        could not converge (a real failure). If the value can't be parsed, fall
+        back to the weaker "cause unrecorded" text cue, treating a named cause
+        as a genuine failure.
+        """
+        m = _TIMESTEP_VALUE_RE.search(line)
+        if m:
+            try:
+                return float(m.group(1)) == 0.0
+            except ValueError:
+                pass
+        return bool(_CAUSE_UNRECORDED_RE.search(line))
 
     def _mark_errored(self, line: str) -> None:
         """Flag the current run as failed and record any line-numbered error."""
