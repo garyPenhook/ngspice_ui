@@ -382,6 +382,38 @@ def test_halt_flag_is_cleared_so_next_runs_real_abort_is_caught(qapp):
     assert ctrl.last_run_had_errors is True
 
 
+def test_resumed_run_real_abort_is_caught_after_halt(qapp):
+    # P2: bg_resume continues the SAME run, so there is no _begin_run reset to
+    # clear the halt excuse. The excuse must be consumed when the halt's own
+    # abort line is seen, so a genuine abort on the resumed run still fails.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    ctrl.halt()
+    # The halt's wind-down abort is excused — and that consumes the excuse.
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is False
+    ctrl.resume()  # same run continues; no per-run state reset
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
+def test_timestep_too_small_without_parseable_value_fails(qapp):
+    # P1: ngspice also prints "timestep too small ... cause unrecorded" for hard
+    # OP/DC failures. Without a parseable "timestep = 0", the line is NOT the
+    # benign end-of-run case and must be treated as a failure rather than masking
+    # the abort that follows.
+    ctrl, session = _make_controller()
+    ctrl.run()
+    session.event_queue.put_nowait(
+        CharEvent(line="doAnalyses: TRAN:  Timestep too small: cause unrecorded.")
+    )
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
+
+
 def test_completion_not_starved_by_data_backlog(qapp):
     ctrl, session = _make_controller()
     finished: list[int] = []

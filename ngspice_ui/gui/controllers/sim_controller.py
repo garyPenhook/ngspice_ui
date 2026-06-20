@@ -60,8 +60,6 @@ _ABORT_RE = re.compile(r"\bsimulation(?:\(s\))?\s+(?:interrupted|aborted)\b", re
 # the circuit, so keying off "cause unrecorded" alone wrongly fails good runs.
 _TIMESTEP_SMALL_RE = re.compile(r"\btimestep too small\b", re.IGNORECASE)
 _TIMESTEP_VALUE_RE = re.compile(r"\btimestep\s*=\s*([0-9.eE+-]+)", re.IGNORECASE)
-# Fallback only, when the timestep value cannot be parsed from the line.
-_CAUSE_UNRECORDED_RE = re.compile(r"\bcause unrecorded\b", re.IGNORECASE)
 _ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
 
 _ANALYSIS_KEYWORDS: frozenset[str] = frozenset(
@@ -394,27 +392,40 @@ class SimController(QObject):
                 and (self._run_halted or self._run_benign_abort)
                 and not self._run_errored
             ):
+                # Consume the one-shot excuse: it covers exactly the abort line
+                # that the halt / benign stop emits. Clearing it here (rather
+                # than leaving it set until the next _begin_run) means a *later*
+                # real abort on the same run — e.g. after the user resumes a
+                # halted run with bg_resume — is still classified as a failure
+                # instead of being silently masked.
+                self._run_halted = False
+                self._run_benign_abort = False
                 return
             self._mark_errored(line)
 
     @staticmethod
     def _is_benign_timestep(line: str) -> bool:
-        """True if a "timestep too small" line is the benign end-of-run case.
+        """True only when a "timestep too small" line is provably the benign
+        end-of-run case.
 
-        Keys off the reported timestep value: exactly 0 means the solver reached
-        the stop time / a breakpoint with nothing left to integrate (valid data
-        so far). A nonzero value means it kept subdividing mid-run and still
-        could not converge (a real failure). If the value can't be parsed, fall
-        back to the weaker "cause unrecorded" text cue, treating a named cause
-        as a genuine failure.
+        Keys off the reported timestep value: an explicit ``timestep = 0`` means
+        the solver reached the stop time / a breakpoint with nothing left to
+        integrate (valid data so far). A nonzero value means it kept subdividing
+        mid-run and still could not converge — a real failure. A value we cannot
+        parse (or a line carrying no value at all) is also treated as a failure:
+        ngspice prints "timestep too small ... cause unrecorded" for hard OP/DC
+        and initial-transient failures too, so that text alone is not a safe
+        benign signal. Failing closed here means an ambiguous line can never
+        mask a genuine abort (the cost is only that a malformed-but-benign line
+        is reported as a failure rather than silently kept).
         """
         m = _TIMESTEP_VALUE_RE.search(line)
-        if m:
-            try:
-                return float(m.group(1)) == 0.0
-            except ValueError:
-                pass
-        return bool(_CAUSE_UNRECORDED_RE.search(line))
+        if not m:
+            return False
+        try:
+            return float(m.group(1)) == 0.0
+        except ValueError:
+            return False
 
     def _mark_errored(self, line: str) -> None:
         """Flag the current run as failed and record any line-numbered error."""
