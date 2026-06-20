@@ -250,10 +250,31 @@ class AnalysisPanel(QWidget):
         cfg["temp_value"] = self._temp_edit.text().strip()
         return cfg
 
+    def _reset_all_params(self) -> None:
+        """Reset every analysis page's widgets back to their spec defaults.
+
+        set_config only writes the *selected* analysis's parameters, so without
+        this the other pages keep whatever a previous project left in them —
+        reselecting an analysis would then restore stale values. Clearing all
+        pages first makes the loaded config the single source of truth.
+        """
+        for page_idx, key in enumerate(ANALYSIS_KEY_ORDER, start=1):
+            widgets = self._param_widgets[page_idx]
+            for p in ANALYSES[key].params:
+                w = widgets.get(p.name)
+                if w is None:
+                    continue
+                if isinstance(w, QComboBox):
+                    idx = w.findText(p.default) if p.default else -1
+                    w.setCurrentIndex(idx if idx >= 0 else 0)
+                elif isinstance(w, QLineEdit):
+                    w.setText(p.default or "")
+
     def set_config(self, cfg: dict) -> None:
         """Restore analysis setup from a dict previously returned by get_config()."""
         if not isinstance(cfg, dict):
             cfg = {}
+        self._reset_all_params()
         key = cfg.get("key")
         if key is None or key not in ANALYSES:
             self._combo.setCurrentIndex(0)

@@ -98,7 +98,16 @@ class ProjectDocument:
 def migrate(raw: dict) -> dict:
     """Upgrade an older project dict in place to :data:`CURRENT_VERSION`.
 
-    No-op today (v2 is the only known version). This is the seam for future
-    schema changes — branch on ``raw.get("version")`` and transform.
+    Older versions are migrated forward (no transforms needed yet — v2 is the
+    only released schema). A version *newer* than this build understands is
+    rejected outright: silently accepting it would apply unknown-shaped data
+    through the lenient field loader and quietly drop or misread fields the
+    newer writer added. Better to tell the user their file needs a newer build.
     """
+    version = raw.get("version", 1)
+    if isinstance(version, int) and version > CURRENT_VERSION:
+        raise ProjectError(
+            f"Project schema version {version} is newer than this build "
+            f"supports (max {CURRENT_VERSION}). Update ngspice-ui to open it."
+        )
     return raw

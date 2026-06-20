@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...models.expr import SAFE_NUMPY as _SAFE_NUMPY
 from ...models.expr import safe_eval as _safe_eval
 from ...models.waveform import compute_fft, compute_group_delay
 
@@ -164,7 +166,31 @@ class _PlotPane(QWidget):
         self._btn_grpdelay.toggled.connect(lambda _: self._replot())
         ctrl_bar.addWidget(self._btn_grpdelay)
 
+        # Smith-chart interpretation: the data is either already a reflection
+        # coefficient Γ (e.g. an S-parameter) or an impedance Z that must be
+        # normalised by the reference impedance Z₀ via Γ = (Z − Z₀)/(Z + Z₀).
+        self._smith_lbl = QLabel("Smith:")
+        self._smith_interp = QComboBox()
+        self._smith_interp.addItems(["Γ (reflection)", "Z → Γ"])
+        self._smith_interp.setToolTip(
+            "Interpret the complex vector as a reflection coefficient Γ directly,\n"
+            "or as an impedance Z to normalise by Z₀."
+        )
+        self._smith_interp.currentIndexChanged.connect(lambda _: self._replot())
+        self._z0_lbl = QLabel("Z₀:")
+        self._z0_edit = QLineEdit("50")
+        self._z0_edit.setFixedWidth(54)
+        self._z0_edit.setToolTip("Reference impedance Z₀ (Ω) used for the Z → Γ conversion")
+        self._z0_edit.editingFinished.connect(self._replot)
+        ctrl_bar.addWidget(self._smith_lbl)
+        ctrl_bar.addWidget(self._smith_interp)
+        ctrl_bar.addWidget(self._z0_lbl)
+        ctrl_bar.addWidget(self._z0_edit)
+
         ctrl_bar.addStretch()
+
+        # Smith controls are only meaningful in Smith mode.
+        self._update_smith_controls_visibility()
 
         right = QWidget()
         rl = QVBoxLayout(right)
@@ -248,38 +274,26 @@ class _PlotPane(QWidget):
         traces = self._gather_traces()
         if not traces:
             return
-        # Shared x axis from the first trace that carries a scale vector.
-        x = next((t[2] for t in traces if t[2] is not None), None)
-        x_plot = next((t[0] for t in traces if t[2] is not None), "")
+        # Each trace may be sampled on a different plot/scale (e.g. a tran trace
+        # pinned next to an AC trace), so a single shared X column would misalign
+        # them. Emit one X column per trace alongside its value column(s).
+        columns: list[tuple[str, object]] = []
+        for plot_name, vec_name, x, y, is_complex in traces:
+            col = f"{plot_name}.{vec_name}"
+            if x is not None:
+                columns.append((f"x ({col})", x))
+            if is_complex:
+                # Complex (AC/Smith) data: keep both components, not just Re.
+                columns.append((f"Re({col})", y.real))
+                columns.append((f"Im({col})", y.imag))
+            else:
+                columns.append((col, y.real))
+        length = max((len(seq) for _, seq in columns), default=0)
         with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            header = []
-            if x is not None:
-                header.append(f"x ({x_plot})")
-            for plot_name, vec_name, _x, _y, is_complex in traces:
-                col = f"{plot_name}.{vec_name}"
-                if is_complex:
-                    # Complex (AC/Smith) data: keep both components, not just Re.
-                    header.append(f"Re({col})")
-                    header.append(f"Im({col})")
-                else:
-                    header.append(col)
-            w.writerow(header)
-            length = max((len(t[3]) for t in traces), default=0)
-            if x is not None:
-                length = max(length, len(x))
+            w.writerow([h for h, _ in columns])
             for i in range(length):
-                row: list = []
-                if x is not None:
-                    row.append(x[i] if i < len(x) else "")
-                for _, _, _x, y, is_complex in traces:
-                    in_range = i < len(y)
-                    if is_complex:
-                        row.append(y.real[i] if in_range else "")
-                        row.append(y.imag[i] if in_range else "")
-                    else:
-                        row.append(y.real[i] if in_range else "")
-                w.writerow(row)
+                w.writerow([seq[i] if i < len(seq) else "" for _, seq in columns])
 
     def export_figure(self, path: str) -> None:
         self._fig.savefig(path, bbox_inches="tight", dpi=150)
@@ -402,7 +416,7 @@ class _PlotPane(QWidget):
             raise KeyError(name)
 
         results = []
-        ns = {"__builtins__": {}, "np": np, "vec": _vec}
+        ns = {"__builtins__": {}, "np": _SAFE_NUMPY, "vec": _vec}
         for label, expr in self._derived:
             if label in self._derived_disabled:
                 continue  # trace unchecked in the tree
@@ -420,7 +434,21 @@ class _PlotPane(QWidget):
     def _on_mode_changed(self, idx: int) -> None:
         modes = [self.MODE_AUTO, self.MODE_BODE, self.MODE_NYQUIST, self.MODE_FFT, self.MODE_SMITH]
         self._mode = modes[idx]
+        self._update_smith_controls_visibility()
         self._replot()
+
+    def _update_smith_controls_visibility(self) -> None:
+        show = self._mode == self.MODE_SMITH
+        for w in (self._smith_lbl, self._smith_interp, self._z0_lbl, self._z0_edit):
+            w.setVisible(show)
+
+    def _smith_z0(self) -> float:
+        """Reference impedance Z₀ in ohms (defaults to 50 on invalid input)."""
+        try:
+            z0 = float(self._z0_edit.text())
+        except ValueError:
+            return 50.0
+        return z0 if z0 > 0 else 50.0
 
     def _on_log_y_toggled(self, checked: bool) -> None:
         self._log_y = checked
@@ -429,6 +457,27 @@ class _PlotPane(QWidget):
     # ------------------------------------------------------------------
     # Plotting
     # ------------------------------------------------------------------
+
+    def _current_scale(self) -> np.ndarray | None:
+        """Return the current plot's scale vector (time/frequency/…), or None.
+
+        Derived traces are evaluated against vectors in the current plot, so
+        this is the x-axis they belong on — plotting them against the raw sample
+        index instead mislabels the axis and distorts non-uniform sweeps.
+        """
+        if self._result is None:
+            return None
+        plot = self._result.current_plot()
+        if not plot:
+            return None
+        vecs = self._plots_vecs.get(plot) or self._result.all_vecs(plot)
+        scale_name = next((v for v in vecs if v.lower() in _SCALE_NAMES), None)
+        if not scale_name:
+            return None
+        try:
+            return self._result.get_vector(f"{plot}.{scale_name}").data.real
+        except Exception:
+            return None
 
     def _gather_traces(self) -> list:
         traces = []
@@ -478,12 +527,18 @@ class _PlotPane(QWidget):
         else:
             self._plot_real(traces)
 
-        # Derived traces always plotted as real on _ax
+        # Derived traces always plotted as real on _ax, against the current
+        # plot's scale vector when its length matches (falls back to sample
+        # index only when no compatible scale is available).
+        derived_x = self._current_scale() if derived else None
         for i, (label, y) in enumerate(derived):
             if len(y) == 0:
                 continue
             color = _COLORS[(len(traces) + i) % len(_COLORS)]
-            self._ax.plot(y, label=f"[{label}]", color=color, linestyle=":")
+            if derived_x is not None and len(derived_x) == len(y):
+                self._ax.plot(derived_x, y, label=f"[{label}]", color=color, linestyle=":")
+            else:
+                self._ax.plot(y, label=f"[{label}]", color=color, linestyle=":")
 
         if self._log_y and self._ax:
             try:
@@ -584,7 +639,9 @@ class _PlotPane(QWidget):
         self._ax.grid(True, alpha=0.3)
 
     def _plot_smith(self, traces: list) -> None:
-        self._ax.set_title("Smith Chart")
+        convert_z = self._smith_interp.currentText().startswith("Z")
+        z0 = self._smith_z0()
+        self._ax.set_title(f"Smith Chart (Z₀ = {_fmt(z0)}Ω)" if convert_z else "Smith Chart")
         self._ax.set_aspect("equal")
         # Draw smith chart grid (constant-R and constant-X circles)
         theta = np.linspace(0, 2 * np.pi, 200)
@@ -611,13 +668,42 @@ class _PlotPane(QWidget):
         self._ax.set_xlabel("Re(Γ)")
         self._ax.set_ylabel("Im(Γ)")
 
+        # A Smith chart only has meaning for a reflection coefficient Γ
+        # (|Γ| ≤ 1 for a passive load). Depending on the selected interpretation
+        # we either plot the vector as Γ directly or convert an impedance Z via
+        # Γ = (Z − Z₀)/(Z + Z₀). In raw-Γ mode, values outside the unit circle
+        # are the tell-tale that the vector isn't actually Γ, so we warn; in
+        # Z→Γ mode |Γ|>1 just means negative resistance and is legitimate.
+        out_of_range = False
+        plotted_any = False
         for i, (plot_name, vec_name, x, y, is_complex) in enumerate(traces):
             if not is_complex:
                 continue
+            plotted_any = True
             color = _COLORS[i % len(_COLORS)]
-            # Treat complex data as reflection coefficient directly
-            self._ax.plot(y.real, y.imag, label=vec_name, color=color)
-        self._ax.legend(fontsize="small")
+            if convert_z:
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    gamma = (y - z0) / (y + z0)
+            else:
+                gamma = y
+                if gamma.size and float(np.nanmax(np.abs(gamma))) > 1.05:
+                    out_of_range = True
+            self._ax.plot(gamma.real, gamma.imag, label=vec_name, color=color)
+        if plotted_any:
+            self._ax.legend(fontsize="small")
+        if out_of_range:
+            self._ax.text(
+                0.5,
+                -0.12,
+                "⚠ Values exceed |Γ|=1 — data is not a reflection coefficient. "
+                "If this is an impedance, switch the Smith selector to “Z → Γ”.",
+                transform=self._ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize="small",
+                color="#b00",
+                wrap=True,
+            )
 
     # ------------------------------------------------------------------
     # Cursors

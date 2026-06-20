@@ -7,6 +7,9 @@ Dunder attribute access and any name outside the whitelist raise ValueError.
 from __future__ import annotations
 
 import ast
+import math
+
+import numpy as np
 
 _WHITELISTED_NAMES: frozenset[str] = frozenset(
     {
@@ -204,7 +207,7 @@ def _validate(node: ast.AST, allowed: frozenset[str]) -> None:
         raise ValueError(f"construct not allowed: {type(node).__name__!r}")
 
 
-def validate_expr(expr: str, extra_names: frozenset[str] = frozenset()) -> ast.AST:
+def validate_expr(expr: str, extra_names: frozenset[str] = frozenset()) -> ast.Expression:
     """Parse *expr* and validate it against the whitelist plus *extra_names*.
 
     Returns the parsed AST (an :class:`ast.Expression`) so callers can compile
@@ -213,6 +216,95 @@ def validate_expr(expr: str, extra_names: frozenset[str] = frozenset()) -> ast.A
     tree = ast.parse(expr, mode="eval")
     _validate(tree, _WHITELISTED_NAMES | extra_names)
     return tree
+
+
+class _SafeNumpy:
+    """A numpy facade that caps the size of array-allocating calls.
+
+    Loaded measurement / derived-trace / co-sim expressions are auto-evaluated
+    after every run, so a project file could smuggle ``np.zeros(10**12)`` (or
+    ``arange`` / ``linspace`` / ``full`` / ``ones`` / ``empty``) and exhaust
+    memory even though the AST sandbox blocks code execution. This wrapper
+    estimates the element count *before* allocating and refuses oversized
+    requests. Everything else (reductions over ``vec()`` arrays, ufuncs,
+    constants) is delegated unchanged to numpy.
+
+    Use :data:`SAFE_NUMPY` as the ``np`` binding in evaluation namespaces.
+    """
+
+    #: Upper bound on elements any single allocator may produce (~400 MB float64).
+    MAX_ELEMENTS = 50_000_000
+
+    def __getattr__(self, name: str):
+        # Anything not overridden below is the real numpy attribute.
+        return getattr(np, name)
+
+    def _check(self, n: int) -> None:
+        if n > self.MAX_ELEMENTS:
+            raise ValueError(
+                f"refusing to allocate array of {n} elements (limit {self.MAX_ELEMENTS})"
+            )
+
+    @staticmethod
+    def _count(shape) -> int:
+        if isinstance(shape, (int, np.integer)):
+            return int(shape)
+        try:
+            total = 1
+            for d in shape:
+                total *= int(d)
+            return total
+        except TypeError:
+            return 0
+
+    def zeros(self, shape, *a, **k):
+        self._check(self._count(shape))
+        return np.zeros(shape, *a, **k)
+
+    def ones(self, shape, *a, **k):
+        self._check(self._count(shape))
+        return np.ones(shape, *a, **k)
+
+    def empty(self, shape, *a, **k):
+        self._check(self._count(shape))
+        return np.empty(shape, *a, **k)
+
+    def full(self, shape, *a, **k):
+        self._check(self._count(shape))
+        return np.full(shape, *a, **k)
+
+    def arange(self, *a, **k):
+        if len(a) == 1:
+            start, stop, step = 0, a[0], k.get("step", 1)
+        elif len(a) == 2:
+            start, stop, step = a[0], a[1], k.get("step", 1)
+        else:
+            start, stop, step = a[0], a[1], a[2]
+        try:
+            n = max(0, math.ceil((float(stop) - float(start)) / float(step)))
+        except (TypeError, ValueError, ZeroDivisionError):
+            n = 0
+        self._check(n)
+        return np.arange(*a, **k)
+
+    def linspace(self, *a, **k):
+        num = k.get("num")
+        if num is None and len(a) >= 3:
+            num = a[2]
+        if num is None:
+            num = 50
+        try:
+            n = int(num)
+        except (TypeError, ValueError):
+            n = 0
+        # _check() must run *outside* the conversion try/except, or its
+        # "refusing to allocate" ValueError would be swallowed here.
+        self._check(n)
+        return np.linspace(*a, **k)
+
+
+#: Shared size-capped numpy facade for expression namespaces.
+SAFE_NUMPY = _SafeNumpy()
 
 
 def safe_eval(expr: str, ns: dict, extra_names: frozenset[str] = frozenset()) -> object:

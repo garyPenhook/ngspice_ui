@@ -112,9 +112,13 @@ def generate_netlists(
                 new_val = vary_value(nom, pct, dist, rng)
             except ValueError:
                 continue  # leave original value intact for unparseable entries
+
+            def _repl(m: re.Match[str], v: float = new_val) -> str:
+                return m.group(1) + f"{v:.6g}"
+
             text = re.sub(
                 rf"(?m)^(\s*{re.escape(comp)}\s+\S+\s+\S+\s+)\S+",
-                lambda m, v=new_val: m.group(1) + f"{v:.6g}",
+                _repl,
                 text,
                 count=1,
             )

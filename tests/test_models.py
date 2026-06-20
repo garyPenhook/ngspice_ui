@@ -39,6 +39,23 @@ def _ns(**extra):
     }
 
 
+def test_safe_numpy_caps_oversized_allocation():
+    from ngspice_ui.models.expr import SAFE_NUMPY
+
+    ns = _ns(np=SAFE_NUMPY)
+    oversized = (
+        "np.zeros(10**12)",
+        "np.ones(10**12)",
+        "np.arange(0, 10**12)",
+        "np.linspace(0, 1, 10**12)",
+    )
+    for src in oversized:
+        with pytest.raises(ValueError, match="refusing to allocate"):
+            safe_eval(src, ns)
+    # Reasonably-sized allocations and reductions still work.
+    assert safe_eval("np.sum(np.zeros(10))", ns) == 0.0
+
+
 def test_safe_eval_numeric():
     assert safe_eval("1 + 2 * 3", _ns()) == 7
 

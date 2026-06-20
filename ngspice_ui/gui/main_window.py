@@ -228,6 +228,11 @@ class MainWindow(MainWindowUI, QMainWindow):
             self._reset_project_state()
             self._editor.set_content(text, path=p)
             self._current_project_path = None
+            # _reset_project_state() dirties the project via widget change
+            # signals; a freshly opened, unmodified netlist is clean, so clear
+            # the flag after the reset settles (the editor itself tracks its own
+            # modified state separately).
+            self._project_dirty = False
         self._add_to_recent(str(p))
         self._update_title()
 

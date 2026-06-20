@@ -42,6 +42,37 @@ def _sanitize_net(name: str) -> str:
     n = re.sub(r"[^A-Za-z0-9_]", "_", n)
     return n or "net"
 
+
+class _NetNamer:
+    """Sanitise net names while keeping distinct inputs distinct.
+
+    ``_sanitize_net`` is lossy (both ``A-B`` and ``A/B`` → ``A_B``), so without
+    this two different Eagle nets could collapse onto one SPICE node and short.
+    The same raw name always maps to the same node; a colliding *different* raw
+    name gets a numeric suffix. Ground ('0') is exempt.
+    """
+
+    def __init__(self) -> None:
+        self._by_raw: dict[str, str] = {}
+        self._used: set[str] = set()
+
+    def name(self, raw: str) -> str:
+        if raw in self._by_raw:
+            return self._by_raw[raw]
+        base = _sanitize_net(raw)
+        if base == "0":
+            self._by_raw[raw] = "0"
+            return "0"
+        ident = base
+        n = 1
+        while ident in self._used:
+            n += 1
+            ident = f"{base}_{n}"
+        self._used.add(ident)
+        self._by_raw[raw] = ident
+        return ident
+
+
 # Default SPICE node ordering by element-type letter.
 # Keys are pin names as used in Eagle library symbols.
 _PIN_ORDER: dict[str, list[str]] = {
@@ -102,6 +133,7 @@ def import_eagle_sch(path: str | Path) -> list[str]:
 
     # ---- Build (part_name, pin_name) → net_name from all sheets -------------
     pin_to_net: dict[tuple[str, str], str] = {}
+    namer = _NetNamer()
     for sheet in schematic.findall("sheets/sheet"):
         # Merge instance-level attribute overrides
         for inst in sheet.findall("instances/instance"):
@@ -119,7 +151,7 @@ def import_eagle_sch(path: str | Path) -> list[str]:
                 parts[pname]["spice_seq"] = ss
 
         for net in sheet.findall("nets/net"):
-            net_name = _sanitize_net(net.get("name", ""))
+            net_name = namer.name(net.get("name", ""))
             for seg in net.findall("segment"):
                 for pinref in seg.findall("pinref"):
                     pname = pinref.get("part", "")
@@ -162,7 +194,14 @@ def import_eagle_sch(path: str | Path) -> list[str]:
 
         # Subcircuit: reference must start with X
         ref = pname if etype != "X" else (pname if pname.startswith("X") else f"X{pname}")
-        netlist.append(f"{ref} {' '.join(nets)} {model}")
+        line = f"{ref} {' '.join(nets)} {model}"
+        # A '?' token means a pin in SPICE_NODE_SEQUENCE had no connected net.
+        # Emitting it yields an invalid card; comment it out so the rest of the
+        # netlist still loads and the offending part is visible to the user.
+        if "?" in line.split():
+            netlist.append(f"* INCOMPLETE pin mapping (unresolved net): {line}")
+        else:
+            netlist.append(line)
 
     return netlist
 

@@ -110,10 +110,15 @@ class SimController(QObject):
         netlist: str,
         analysis_line: str | None,
         extra_lines: list[str] | None = None,
-    ) -> None:
+    ) -> bool:
         """Load *netlist* text, optionally override its analysis command, then bg_run.
 
         extra_lines: prepended before the first non-title line (e.g. .temp).
+
+        Returns True if a background run was actually started. A False return
+        means the load or bg_run failed synchronously and no ``sim_finished``
+        will ever fire — callers driving a sequence must advance themselves
+        instead of waiting for a completion signal that never comes.
         """
         self._begin_run()
         lines = netlist.splitlines()
@@ -145,11 +150,13 @@ class SimController(QObject):
                     self.output_line.emit(f"-- extra: {el} --")
         except RuntimeError as exc:
             self.output_line.emit(f"load error: {exc}")
-            return
+            return False
         try:
             self._session.bg_run()
         except RuntimeError as exc:
             self.output_line.emit(f"run error: {exc}")
+            return False
+        return True
 
     @Slot()
     def halt(self) -> None:
@@ -210,12 +217,26 @@ class SimController(QObject):
         self.run_sequence(netlists, analysis_line, kind="Sweep")
 
     def _seq_run_next(self) -> None:
-        if not self._seq_queue:
-            return
-        text = self._seq_queue.pop(0)
-        self._seq_index += 1
-        self.sequence_progress.emit(self._seq_index, self._seq_total, self._seq_kind)
-        self.run_with_analysis(text, self._seq_analysis_line)
+        # A run that fails to *start* (load/bg_run error) emits no sim_finished,
+        # so we cannot wait for one — advance to the next queued netlist inline.
+        # If every remaining run fails to start, the loop drains the queue and
+        # finalises the sequence here rather than hanging forever.
+        while self._seq_queue:
+            text = self._seq_queue.pop(0)
+            self._seq_index += 1
+            self.sequence_progress.emit(self._seq_index, self._seq_total, self._seq_kind)
+            if self.run_with_analysis(text, self._seq_analysis_line):
+                return  # started; sim_finished will drive the next step
+            # else: synchronous failure — keep trying the rest of the queue
+        self._seq_finalize()
+
+    def _seq_finalize(self) -> None:
+        """Tear down sequence state and announce completion (idempotent)."""
+        if self._seq_connected:
+            self.sim_finished.disconnect(self._seq_on_finished)
+            self._seq_connected = False
+        self._seq_active = False
+        self.sequence_finished.emit(self._seq_total, self._seq_kind)
 
     @Slot()
     def _seq_on_finished(self) -> None:
@@ -230,12 +251,16 @@ class SimController(QObject):
         if self._seq_queue:
             self._seq_run_next()
         else:
-            self.sim_finished.disconnect(self._seq_on_finished)
-            self._seq_connected = False
-            self._seq_active = False
-            self.sequence_finished.emit(self._seq_total, self._seq_kind)
+            self._seq_finalize()
 
     _MAX_DATA_EVENTS_PER_DRAIN = 250
+    # Hard ceiling on how many events we pull from the queue in a single tick.
+    # Without it, one drain can iterate the entire (unbounded) queue on the GUI
+    # thread — a very large simulation backs up millions of points and freezes
+    # the interface even though most are dropped. Anything left over is handled
+    # on the next 50 ms tick, keeping each tick bounded. Sized well above the
+    # data-forward cap so control events are never starved in practice.
+    _MAX_EVENTS_PER_DRAIN = 20_000
 
     @Slot()
     def _drain_queue(self) -> None:
@@ -247,11 +272,13 @@ class SimController(QObject):
         # the plot per tick — excess live points are dropped (the post-run
         # snapshot has the full data) while control events keep draining.
         data_full = False
-        while True:
+        processed = 0
+        while processed < self._MAX_EVENTS_PER_DRAIN:
             try:
                 event = q.get_nowait()
             except queue.Empty:
                 break
+            processed += 1
             if isinstance(event, DataPointEvent):
                 if data_full:
                     continue  # drop excess live points; snapshot retains full data

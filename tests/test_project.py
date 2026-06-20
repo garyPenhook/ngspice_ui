@@ -90,6 +90,15 @@ def test_non_int_version_falls_back():
     assert doc.version == CURRENT_VERSION
 
 
+def test_future_schema_version_is_rejected():
+    # A file written by a newer build must be refused, not silently coerced
+    # through the lenient field loader (which would drop unknown-shaped fields).
+    with pytest.raises(ProjectError, match="newer"):
+        ProjectDocument.from_dict({"version": CURRENT_VERSION + 1})
+    with pytest.raises(ProjectError, match="newer"):
+        ProjectDocument.loads(f'{{"version": {CURRENT_VERSION + 5}}}')
+
+
 def test_unknown_keys_are_ignored():
     doc = ProjectDocument.from_dict({"netlist": "x", "future_field": 42})
     assert doc.netlist == "x"

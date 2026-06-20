@@ -32,7 +32,6 @@ import csv
 import math
 from pathlib import Path
 
-import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -51,13 +50,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...models.expr import SAFE_NUMPY as _SAFE_NUMPY
 from ...models.expr import validate_expr as _validate_expr
 
-_EXPR_SCOPE = {"__builtins__": {}, "math": math, "np": np, "abs": abs, "float": float}
+_EXPR_SCOPE = {"__builtins__": {}, "math": math, "np": _SAFE_NUMPY, "abs": abs, "float": float}
 
-# Names bound when a co-sim expression runs: the callback parameters plus the
-# math/numpy modules already present in _EXPR_SCOPE.
-_COSIM_NAMES = frozenset({"t", "name", "old_delta"})
+# Names a *source* expression may reference: only the callback parameters bound
+# by the compiled lambda (t, name) plus the math/numpy modules in _EXPR_SCOPE.
+# 'old_delta' belongs solely to the sync callback — allowing it here passes
+# validation but then NameErrors at call time (the source lambda never binds
+# it), so a co-sim source would silently output zero.
+_COSIM_NAMES = frozenset({"t", "name"})
 
 
 def _compile_expr(expr: str, label: str):
@@ -344,6 +347,22 @@ class CoSimWidget(QWidget):
             if len(times) < 2:
                 QMessageBox.warning(self, "Load CSV", "Need at least 2 data rows.")
                 return
+            # np.interp requires strictly increasing sample times; unsorted or
+            # duplicated times silently produce wrong interpolation. Sort the
+            # pairs by time and reject duplicates rather than feeding np.interp
+            # invalid input.
+            order = sorted(range(len(times)), key=lambda k: times[k])
+            was_unsorted = order != list(range(len(times)))
+            times = [times[k] for k in order]
+            values = [values[k] for k in order]
+            if any(times[k] == times[k + 1] for k in range(len(times) - 1)):
+                QMessageBox.warning(
+                    self,
+                    "Load CSV",
+                    "Time column has duplicate values; times must be strictly "
+                    "increasing for interpolation.",
+                )
+                return
             # Build a numpy-interp expression referencing inline arrays
             t_str = repr(times)
             v_str = repr(values)
@@ -353,7 +372,8 @@ class CoSimWidget(QWidget):
                 self._table.setItem(row, 3, QTableWidgetItem(expr))
             else:
                 item.setText(expr)
-            self._status.setText(f"Loaded {len(times)} points from {Path(path).name}")
+            note = " (reordered by time)" if was_unsorted else ""
+            self._status.setText(f"Loaded {len(times)} points from {Path(path).name}{note}")
         except Exception as exc:
             QMessageBox.critical(self, "Load CSV Error", str(exc))
 

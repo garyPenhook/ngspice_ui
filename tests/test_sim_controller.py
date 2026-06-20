@@ -132,6 +132,58 @@ def test_sequence_empty_list_is_noop(qapp):
     assert session.run_count == 0
 
 
+def test_sequence_does_not_hang_when_a_run_fails_to_start(qapp):
+    """A load/bg_run error emits no sim_finished, so the sequence must advance
+    itself rather than stalling forever on a completion signal that never comes.
+    """
+
+    class FailingLoadSession(FakeSession):
+        def __init__(self, fail_on):
+            super().__init__()
+            self._fail_on = fail_on
+
+        def load_netlist(self, lines):
+            super().load_netlist(lines)
+            # Second netlist fails to load (e.g. ngSpice_Circ error).
+            if len(self.loaded) == self._fail_on:
+                raise RuntimeError("synthetic load failure")
+
+    session = FailingLoadSession(fail_on=2)
+    ctrl = SimController(session=session)
+    ctrl._drain_timer.stop()
+    finished: list[tuple[int, str]] = []
+    ctrl.sequence_finished.connect(lambda t, k: finished.append((t, k)))
+
+    ctrl.run_monte_carlo(["* A\nRA 1 0 1", "* B\nRB 1 0 2", "* C\nRC 1 0 3"], "op")
+    # Run 1 started.
+    assert session.run_count == 1
+    # Completion of run 1 advances; run 2 fails to start, so the controller must
+    # skip straight to run 3 inline (no sim_finished arrives for the failed run).
+    ctrl.sim_finished.emit()
+    assert session.run_count == 2  # run 3 actually started (run 2 never ran)
+    # Completion of run 3 finalises the whole sequence.
+    ctrl.sim_finished.emit()
+    assert finished == [(3, "Monte Carlo")]
+
+
+def test_sequence_completes_when_every_run_fails_to_start(qapp):
+    class AlwaysFailSession(FakeSession):
+        def load_netlist(self, lines):
+            super().load_netlist(lines)
+            raise RuntimeError("synthetic load failure")
+
+    session = AlwaysFailSession()
+    ctrl = SimController(session=session)
+    ctrl._drain_timer.stop()
+    finished: list[tuple[int, str]] = []
+    ctrl.sequence_finished.connect(lambda t, k: finished.append((t, k)))
+
+    ctrl.run_param_sweep(["* A\nRA 1 0 1", "* B\nRB 1 0 2"], "op")
+    # No run ever started, but the sequence must still finalise instead of hang.
+    assert session.run_count == 0
+    assert finished == [(2, "Sweep")]
+
+
 # ------------------------------------------------------------------
 # BGThreadEvent lifecycle
 #

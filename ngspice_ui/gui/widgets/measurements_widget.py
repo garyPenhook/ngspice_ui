@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...models.expr import SAFE_NUMPY as _SAFE_NUMPY
 from ...models.expr import safe_eval as _safe_eval
 
 
@@ -43,7 +44,7 @@ class MeasurementsWidget(QWidget):
 
         self._table = QTableWidget(0, 3)
         self._table.setHorizontalHeaderLabels(["Name", "Expression", "Value"])
-        self._table.itemChanged.connect(self.changed)
+        self._table.itemChanged.connect(self._on_item_changed)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -70,6 +71,13 @@ class MeasurementsWidget(QWidget):
 
     def set_result(self, result) -> None:
         self._result = result
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        # The Value column (2) is filled in by evaluate(), not the user. Treating
+        # those writes as edits would mark the project dirty every time results
+        # refresh, so only user-editable columns (Name/Expression) count.
+        if item.column() != 2:
+            self.changed.emit()
 
     # ------------------------------------------------------------------
     # Table helpers
@@ -115,7 +123,7 @@ class MeasurementsWidget(QWidget):
 
         ns: dict = {
             "__builtins__": {},  # no builtins — prevents exec/open/import in loaded projects
-            "np": np,
+            "np": _SAFE_NUMPY,  # size-capped facade: blocks giant-array allocations
             "math": math,
             "abs": abs,
             "round": round,
@@ -141,10 +149,17 @@ class MeasurementsWidget(QWidget):
             try:
                 result = _safe_eval(expr, ns)
                 if isinstance(result, np.ndarray):
-                    result = float(result.flat[-1])
-                if isinstance(result, complex):
-                    angle = math.degrees(math.atan2(result.imag, result.real))
-                    val_item.setText(f"{abs(result):.6g} ∠{angle:.2f}°")
+                    if result.size == 0:
+                        val_item.setText("(empty)")
+                        continue
+                    # Reduce an array result to its last sample, preserving a
+                    # complex value instead of casting it to float (which raises
+                    # or silently drops the imaginary part).
+                    result = result.flat[-1]
+                if isinstance(result, (complex, np.complexfloating)):
+                    c = complex(result)
+                    angle = math.degrees(math.atan2(c.imag, c.real))
+                    val_item.setText(f"{abs(c):.6g} ∠{angle:.2f}°")
                 else:
                     val_item.setText(f"{float(result):.6g}")
             except Exception as exc:

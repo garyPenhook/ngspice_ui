@@ -11,8 +11,12 @@ _MODEL_REF_RE = re.compile(r"^\s*[qmjd]\w+(?:\s+\S+){2,}\s+(\w+)\s*(?:;.*)?$", r
 _SUBCKT_DEF_RE = re.compile(r"^\s*\.subckt\s+(\w+)", re.IGNORECASE)
 _ENDS_RE = re.compile(r"^\s*\.ends\b", re.IGNORECASE)
 _MODEL_DEF_RE = re.compile(r"^\s*\.model\s+(\w+)", re.IGNORECASE)
-# Flag values like 10kk (double suffix) or 4.7mF (suffix followed by extra letter)
-_VALUE_TYPO_RE = re.compile(r"\b(\d+(?:\.\d+)?)([KkM](?!EG|eg)[A-Za-z])")
+# Flag a doubled scale suffix such as 10kk or 4.7uuF — a number immediately
+# followed by the *same* scale-factor letter twice. A single suffix followed by
+# a unit letter (10kOhm, 4.7mF, 1MHz) is perfectly valid in SPICE — the scale
+# factor is consumed and the trailing unit text is ignored — so only the
+# redundant repeat is genuinely suspicious.
+_VALUE_TYPO_RE = re.compile(r"\b\d+(?:\.\d+)?([TGKMUNPFtgkmunpf])\1")
 
 
 def lint(text: str, netlist_path: Path | None = None) -> list[tuple[int, str]]:
@@ -71,13 +75,12 @@ def lint(text: str, netlist_path: Path | None = None) -> list[tuple[int, str]]:
         if m4:
             model_refs.append((i, m4.group(1).lower()))
 
-        # Flag value typos like 10kk or 4.7mV (double-suffix or suffix+unit letter)
+        # Flag value typos like 10kk or 4.7uuF (a scale suffix repeated)
         for typo_m in _VALUE_TYPO_RE.finditer(stripped):
             issues.append(
                 (
                     i,
-                    f"Possible value typo: {typo_m.group(0)!r} "
-                    "(double suffix or suffix followed by unit letter)",
+                    f"Possible value typo: {typo_m.group(0)!r} (scale suffix repeated)",
                 )
             )
 

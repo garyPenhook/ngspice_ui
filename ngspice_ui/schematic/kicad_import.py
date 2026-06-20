@@ -72,6 +72,43 @@ def _sanitize_net(name: str) -> str:
     return n or "net"
 
 
+class _NetNamer:
+    """Sanitises net names while guaranteeing distinct inputs stay distinct.
+
+    ``_sanitize_net`` is lossy — both ``A-B`` and ``A/B`` collapse to ``A_B`` —
+    so two physically different nets could silently become the same SPICE node
+    (a short). This maps each *original* name to a unique identifier: the same
+    raw name always yields the same node (intended, e.g. matching labels), while
+    a different raw name that would collide gets a numeric suffix. Ground ('0')
+    is exempt — many distinct symbols legitimately share it.
+    """
+
+    def __init__(self) -> None:
+        self._by_raw: dict[str, str] = {}
+        self._used: set[str] = set()
+
+    def name(self, raw: str) -> str:
+        if raw in self._by_raw:
+            return self._by_raw[raw]
+        base = _sanitize_net(raw)
+        if base == "0":
+            self._by_raw[raw] = "0"
+            return "0"
+        ident = base
+        n = 1
+        while ident in self._used:
+            n += 1
+            ident = f"{base}_{n}"
+        self._used.add(ident)
+        self._by_raw[raw] = ident
+        return ident
+
+    def reserve(self, ident: str) -> str:
+        """Register an already-final identifier (e.g. an auto-generated node)."""
+        self._used.add(ident)
+        return ident
+
+
 # ---------------------------------------------------------------------------
 # Sim.Library path resolution
 # ---------------------------------------------------------------------------
@@ -272,7 +309,7 @@ def _build_uf(root: list) -> _UF:
 # ---------------------------------------------------------------------------
 
 
-def _assign_label_names(root: list, uf: _UF) -> dict[tuple[int, int], str]:
+def _assign_label_names(root: list, uf: _UF, namer: _NetNamer) -> dict[tuple[int, int], str]:
     names: dict[tuple[int, int], str] = {}
 
     def _set(pt: tuple[float, float], name: str, force: bool = False) -> None:
@@ -284,13 +321,13 @@ def _assign_label_names(root: list, uf: _UF) -> dict[tuple[int, int], str]:
         name = _atom(lbl, 1)
         at = _find(lbl, "at")
         if name and at:
-            _set((float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))), _sanitize_net(name))
+            _set((float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))), namer.name(name))
 
     for lbl in _find_all(root, "global_label"):
         name = _atom(lbl, 1)
         at = _find(lbl, "at")
         if name and at:
-            spice = _sanitize_net(name)
+            spice = namer.name(name)
             _set(
                 (float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))),
                 spice,
@@ -301,13 +338,13 @@ def _assign_label_names(root: list, uf: _UF) -> dict[tuple[int, int], str]:
         name = _atom(lbl, 1)
         at = _find(lbl, "at")
         if name and at:
-            _set((float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))), _sanitize_net(name))
+            _set((float(_atom(at, 1, "0")), float(_atom(at, 2, "0"))), namer.name(name))
 
     return names
 
 
 def _assign_power_names(
-    root: list, lib_pins: dict, uf: _UF, names: dict[tuple[int, int], str]
+    root: list, lib_pins: dict, uf: _UF, names: dict[tuple[int, int], str], namer: _NetNamer
 ) -> None:
     """Inject net names from power symbols (lib_id starting with 'power:')."""
     for sym in _find_all(root, "symbol"):
@@ -319,7 +356,7 @@ def _assign_power_names(
             continue
 
         raw = _prop(sym, "Value") or lib_id.split(":")[-1]
-        spice = _sanitize_net(raw)
+        spice = namer.name(raw)
 
         at = _find(sym, "at")
         if at is None:
@@ -438,13 +475,14 @@ def import_kicad_sch(path: str | Path) -> list[str]:
 
     lib_pins = _extract_lib_pins(root)
     uf = _build_uf(root)
-    names = _assign_label_names(root, uf)
-    _assign_power_names(root, lib_pins, uf, names)
+    namer = _NetNamer()
+    names = _assign_label_names(root, uf, namer)
+    _assign_power_names(root, lib_pins, uf, names, namer)
 
     def net_at(pt: tuple[float, float]) -> str:
         k = uf.find(pt)
         if k not in names:
-            names[k] = f"N{k[0]}_{k[1]}"
+            names[k] = namer.reserve(f"N{k[0]}_{k[1]}")
         return names[k]
 
     # Group placed symbols by Reference so multi-unit ICs produce one SPICE line
@@ -524,14 +562,20 @@ def import_kicad_sch(path: str | Path) -> list[str]:
         g = groups[ref]
         if not g["pin_nets"]:
             continue
-        netlist.append(
-            _make_line(
-                ref,
-                g["value"],
-                g["sim_type"],
-                g["sim_model"],
-                g["sim_pins"],
-                g["pin_nets"],
-            )
+        line = _make_line(
+            ref,
+            g["value"],
+            g["sim_type"],
+            g["sim_model"],
+            g["sim_pins"],
+            g["pin_nets"],
         )
+        # A '?' token means a pin in the Sim.Pins ordering had no resolvable
+        # net — emitting it would produce an invalid card that ngspice rejects
+        # mid-deck. Comment it out so the rest of the netlist still loads and
+        # the user can see exactly which element needs attention.
+        if "?" in line.split():
+            netlist.append(f"* INCOMPLETE pin mapping (unresolved net): {line}")
+        else:
+            netlist.append(line)
     return netlist
