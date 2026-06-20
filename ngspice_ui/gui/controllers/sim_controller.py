@@ -32,9 +32,30 @@ from ngspice_ui.engine.session import NgSpiceSession
 # real error, including the co-sim failures the engine reports as ``Error: ...``.
 _ERR_MSG_RE = re.compile(
     r"^\s*(?:std(?:out|err)\s+)?(?:error|fatal)\b"
-    r"|\b(?:fatal error|simulation (?:interrupted|aborted))\b",
+    r"|\bfatal error\b"
+    # ngspice prints "run simulation(s) aborted" (note the literal "(s)"); an
+    # earlier "simulation aborted" pattern missed it, so genuine aborts were
+    # never flagged. "interrupted" still covers "Simulation interrupted due to
+    # error!".
+    r"|\bsimulation(?:\(s\))?\s+(?:interrupted|aborted)\b"
+    # "source stepping" is ngspice's last-resort operating-point aid; if it
+    # fails the DC/OP solution never converged. Earlier "Dynamic/true gmin
+    # stepping failed" lines are deliberately NOT matched — gmin stepping can
+    # fail and the run still recover via a later method, so they are not
+    # terminal and would false-positive on solvable circuits.
+    r"|\bsource stepping failed\b",
     re.IGNORECASE,
 )
+# Specifically the "run simulation(s) aborted" / "interrupted" line, used to tell
+# a real abort apart from a benign end-of-run stop or a user-requested halt.
+_ABORT_RE = re.compile(r"\bsimulation(?:\(s\))?\s+(?:interrupted|aborted)\b", re.IGNORECASE)
+# The transient "timestep too small" diagnostic that precedes most aborts.
+# ngspice appends a named cause ("...: trouble with node \"p\"") for a genuine
+# convergence failure, or ": cause unrecorded" for the benign case where the
+# solver merely reached the stop time and computed a zero next step — that one
+# leaves valid data and is downgraded to a warning rather than a failure.
+_TIMESTEP_SMALL_RE = re.compile(r"\btimestep too small\b", re.IGNORECASE)
+_CAUSE_UNRECORDED_RE = re.compile(r"\bcause unrecorded\b", re.IGNORECASE)
 _ERR_LINE_RE = re.compile(r"\bline\s+(\d+)\b", re.IGNORECASE)
 
 _ANALYSIS_KEYWORDS: frozenset[str] = frozenset(
@@ -66,6 +87,14 @@ class SimController(QObject):
         self._pending_errors: list[tuple[int, str]] = []
         # True if the current/last run reported an ngspice error via callbacks.
         self._run_errored = False
+        # True once the user explicitly halts, so the "aborted"/"interrupted"
+        # line ngspice then emits is classified as a halt, not a failure.
+        self._run_halted = False
+        # True once a benign end-of-run "timestep too small: cause unrecorded"
+        # is seen, so the following abort line is downgraded to a warning.
+        self._run_benign_abort = False
+        # Non-fatal warning for the current/last run (None when there is none).
+        self._run_warning: str | None = None
 
         # Sequential bg_run state (driven by sim_finished) shared by Monte Carlo
         # and parametric/temperature sweeps — ngspice 46 has no working .step.
@@ -97,10 +126,25 @@ class SimController(QObject):
         """
         return self._run_errored
 
+    @property
+    def last_run_warning(self) -> str | None:
+        """Non-fatal warning from the most recent run, or None.
+
+        Set for an outcome that left usable data but did not finish cleanly —
+        currently a benign end-of-run ``timestep too small: cause unrecorded``
+        (the solver reached the stop time and took a zero-length final step).
+        Always None when :attr:`last_run_had_errors` is True, since a hard error
+        supersedes any warning.
+        """
+        return None if self._run_errored else self._run_warning
+
     def _begin_run(self) -> None:
         """Reset per-run error tracking before launching a (bg) simulation."""
         self._pending_errors.clear()
         self._run_errored = False
+        self._run_halted = False
+        self._run_benign_abort = False
+        self._run_warning = None
 
     @Slot(str)
     def load_netlist(self, text: str, base_dir: str | None = None) -> None:
@@ -176,6 +220,9 @@ class SimController(QObject):
 
     @Slot()
     def halt(self) -> None:
+        # Mark the run as user-halted so the abort/interrupt line ngspice emits
+        # while winding down is not misclassified as a failure.
+        self._run_halted = True
         if self._seq_active:
             self._seq_active = False  # cancel pending runs before the finished signal fires
         try:
@@ -311,14 +358,7 @@ class SimController(QObject):
             match event:
                 case CharEvent(line=line):
                     self.output_line.emit(line)
-                    if _ERR_MSG_RE.search(line):
-                        # Any error line marks the run as failed, even when no
-                        # line number is present (e.g. "Error: incomplete netlist").
-                        self._run_errored = True
-                        m = _ERR_LINE_RE.search(line)
-                        if m:
-                            self._pending_errors.append((int(m.group(1)), line))
-                            self.errors_changed.emit(list(self._pending_errors))
+                    self._classify_output_line(line)
                 case StatEvent(message=msg, percent=pct):
                     self.output_line.emit(f"[{pct:3d}%] {msg}")
                     self.progress.emit(pct)
@@ -333,3 +373,45 @@ class SimController(QObject):
                     self.plot_init.emit(e)
         if data_events:
             self.plot_data.emit(data_events)
+
+    def _classify_output_line(self, line: str) -> None:
+        """Update per-run error/warning state from one ngspice output *line*.
+
+        Three outcomes stream through the same callback and must be told apart:
+        a hard failure (results discarded by the caller), a benign end-of-run
+        transient artifact (results kept, a warning surfaced), and a user halt
+        (neither). The ``timestep too small`` diagnostic is inspected before the
+        abort line it precedes so the abort can be downgraded when appropriate.
+        """
+        if _TIMESTEP_SMALL_RE.search(line):
+            if _CAUSE_UNRECORDED_RE.search(line):
+                # Benign: solver reached the stop time and took a zero-length
+                # final step. Data up to that point is valid — keep it, warn.
+                self._run_benign_abort = True
+                if not self._run_errored:
+                    self._run_warning = (
+                        "transient stopped at end of run (timestep too small, "
+                        "cause unrecorded); results may be incomplete"
+                    )
+            else:
+                # A named cause ("trouble with node ...") is a real failure.
+                self._mark_errored(line)
+            return
+        if _ERR_MSG_RE.search(line):
+            # A user halt or a benign end-of-run stop produces an abort/interrupt
+            # line that is not a failure; everything else that matches is.
+            if (
+                _ABORT_RE.search(line)
+                and (self._run_halted or self._run_benign_abort)
+                and not self._run_errored
+            ):
+                return
+            self._mark_errored(line)
+
+    def _mark_errored(self, line: str) -> None:
+        """Flag the current run as failed and record any line-numbered error."""
+        self._run_errored = True
+        m = _ERR_LINE_RE.search(line)
+        if m:
+            self._pending_errors.append((int(m.group(1)), line))
+            self.errors_changed.emit(list(self._pending_errors))

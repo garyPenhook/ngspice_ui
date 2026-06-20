@@ -711,6 +711,14 @@ class MainWindow(MainWindowUI, QMainWindow):
             self._set_status(f"Failed  ({elapsed:.2f} s)")
             return
 
+        # A non-fatal warning (e.g. a benign end-of-run "timestep too small")
+        # left usable data, so results are still snapshotted below — but flag it
+        # so the run is not presented as a clean success.
+        run_warning = self._controller.last_run_warning
+        if run_warning:
+            self._console.append_line(f"-- warning: {run_warning} --")
+            self._set_status(f"Done, with warnings  ({elapsed:.2f} s)")
+
         # Build an immutable snapshot of this run's vectors and hand it to the
         # read-only consumers (plotting, measurements, OP annotation).
         result = self._snapshot_result()
