@@ -5,6 +5,8 @@ build-backend = "hatchling.build"
 [project]
 name = "ngspice-ui"
 version = "0.1.0"
+description = "PySide6 front-end for ngspice (libngspice via ctypes)."
+readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = [
@@ -16,10 +18,44 @@ dependencies = [
 
 [project.optional-dependencies]
 fast-plot = ["pyqtgraph>=0.13"]
-dev = ["pytest>=8", "ruff>=0.4"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "build>=1.2",
+    "pip-audit>=2.7",
+]
 
 [project.scripts]
 ngspice-ui = "ngspice_ui.__main__:main"
+
+# Explicit packaging policy so release artifacts never depend on whatever files
+# happen to be sitting in the workspace (e.g. a downloaded 2.6 MB manual).
+[tool.hatch.build]
+exclude = [
+    "*.pdf",
+    "ngspice_ui_dist.spec",
+    ".github",
+    "tests",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "ngspice_ui",
+    "examples",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["ngspice_ui"]
+
+# Ship the example circuits inside the installed package so the documented
+# examples/rc_lowpass.cir path is actually present in a wheel install.
+[tool.hatch.build.targets.wheel.force-include]
+"examples" = "ngspice_ui/examples"
 
 [tool.ruff]
 line-length = 100
@@ -33,3 +69,19 @@ select = ["E", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Type checking is gated on the headless logic (models + engine). The GUI layer
+# leans heavily on PySide6/ctypes dynamic attributes that mypy can't model
+# usefully, so it is intentionally out of scope here.
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+files = ["ngspice_ui/models", "ngspice_ui/engine"]
+
+[tool.coverage.run]
+source = ["ngspice_ui"]
+
+[tool.coverage.report]
+# Floor for the whole package (GUI included, so it is modest). Raising it as
+# coverage improves prevents silent regressions below today's level.
+fail_under = 25

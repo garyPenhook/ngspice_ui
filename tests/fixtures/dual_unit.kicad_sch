@@ -1,0 +1,26 @@
+(kicad_sch
+  (lib_symbols
+    (symbol "Sim:DUAL"
+      (symbol "DUAL_1_1"
+        (pin passive line (at 0 2.54 270) (length 0) (name "I1") (number "1"))
+        (pin passive line (at 0 -2.54 90) (length 0) (name "I2") (number "2"))
+      )
+      (symbol "DUAL_2_1"
+        (pin passive line (at 0 2.54 270) (length 0) (name "I3") (number "3"))
+        (pin passive line (at 0 -2.54 90) (length 0) (name "I4") (number "4"))
+      )
+    )
+  )
+  (symbol (lib_id "Sim:DUAL") (at 100 100 0) (unit 1)
+    (property "Reference" "U1" (at 100 100 0))
+    (property "Value" "DUAL" (at 100 100 0))
+  )
+  (symbol (lib_id "Sim:DUAL") (at 150 100 0) (unit 2)
+    (property "Reference" "U1" (at 150 100 0))
+    (property "Value" "DUAL" (at 150 100 0))
+  )
+  (label "a" (at 100 102.54 0))
+  (label "b" (at 100 97.46 0))
+  (label "c" (at 150 102.54 0))
+  (label "d" (at 150 97.46 0))
+)

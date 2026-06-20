@@ -14,9 +14,64 @@ GND net is mapped to SPICE node '0'.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import defusedxml.ElementTree as ET
+
+# Eagle net names that map to SPICE ground (node 0).
+_GND_NAMES: frozenset[str] = frozenset({"gnd", "0", "0v", "vss", "agnd", "dgnd"})
+
+
+def _sanitize_net(name: str) -> str:
+    """Convert an Eagle net name into a valid ngspice node identifier.
+
+    Mirrors the KiCad importer: ground aliases → '0', leading +/- → vp/vn
+    (so '+5V' → 'vp5v', not an illegal node), leading digit → 'v' prefix, and
+    any remaining illegal character → '_'.
+    """
+    n = name.strip()
+    if n.lower() in _GND_NAMES:
+        return "0"
+    if n.startswith("+"):
+        n = "vp" + n[1:]
+    elif n.startswith("-"):
+        n = "vn" + n[1:]
+    if n and n[0].isdigit():
+        n = "v" + n
+    n = re.sub(r"[^A-Za-z0-9_]", "_", n)
+    return n or "net"
+
+
+class _NetNamer:
+    """Sanitise net names while keeping distinct inputs distinct.
+
+    ``_sanitize_net`` is lossy (both ``A-B`` and ``A/B`` → ``A_B``), so without
+    this two different Eagle nets could collapse onto one SPICE node and short.
+    The same raw name always maps to the same node; a colliding *different* raw
+    name gets a numeric suffix. Ground ('0') is exempt.
+    """
+
+    def __init__(self) -> None:
+        self._by_raw: dict[str, str] = {}
+        self._used: set[str] = set()
+
+    def name(self, raw: str) -> str:
+        if raw in self._by_raw:
+            return self._by_raw[raw]
+        base = _sanitize_net(raw)
+        if base == "0":
+            self._by_raw[raw] = "0"
+            return "0"
+        ident = base
+        n = 1
+        while ident in self._used:
+            n += 1
+            ident = f"{base}_{n}"
+        self._used.add(ident)
+        self._by_raw[raw] = ident
+        return ident
+
 
 # Default SPICE node ordering by element-type letter.
 # Keys are pin names as used in Eagle library symbols.
@@ -78,6 +133,7 @@ def import_eagle_sch(path: str | Path) -> list[str]:
 
     # ---- Build (part_name, pin_name) → net_name from all sheets -------------
     pin_to_net: dict[tuple[str, str], str] = {}
+    namer = _NetNamer()
     for sheet in schematic.findall("sheets/sheet"):
         # Merge instance-level attribute overrides
         for inst in sheet.findall("instances/instance"):
@@ -95,9 +151,7 @@ def import_eagle_sch(path: str | Path) -> list[str]:
                 parts[pname]["spice_seq"] = ss
 
         for net in sheet.findall("nets/net"):
-            net_name = net.get("name", "")
-            if net_name.upper() == "GND":
-                net_name = "0"
+            net_name = namer.name(net.get("name", ""))
             for seg in net.findall("segment"):
                 for pinref in seg.findall("pinref"):
                     pname = pinref.get("part", "")
@@ -140,7 +194,14 @@ def import_eagle_sch(path: str | Path) -> list[str]:
 
         # Subcircuit: reference must start with X
         ref = pname if etype != "X" else (pname if pname.startswith("X") else f"X{pname}")
-        netlist.append(f"{ref} {' '.join(nets)} {model}")
+        line = f"{ref} {' '.join(nets)} {model}"
+        # A '?' token means a pin in SPICE_NODE_SEQUENCE had no connected net.
+        # Emitting it yields an invalid card; comment it out so the rest of the
+        # netlist still loads and the offending part is visible to the user.
+        if "?" in line.split():
+            netlist.append(f"* INCOMPLETE pin mapping (unresolved net): {line}")
+        else:
+            netlist.append(line)
 
     return netlist
 

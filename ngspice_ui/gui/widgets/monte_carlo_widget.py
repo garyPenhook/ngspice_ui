@@ -29,6 +29,11 @@ class MonteCarloWidget(QWidget):
 
     run_mc = Signal(list)  # list[str] — one netlist string per run
 
+    # Guard rails on the run count: at least one run, and a ceiling so a stray
+    # huge value can't exhaust memory generating netlists or flood the run
+    # queue. 10000 is far more than any practical Monte Carlo sweep needs.
+    _MAX_RUNS = 10_000
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._netlist: str = ""
@@ -134,7 +139,15 @@ class MonteCarloWidget(QWidget):
         try:
             n_runs = int(self._runs_edit.text())
         except ValueError:
-            n_runs = 20
+            self._status.setText("Runs must be a positive integer.")
+            return
+        if n_runs < 1:
+            self._status.setText("Runs must be at least 1.")
+            return
+        if n_runs > self._MAX_RUNS:
+            self._status.setText(f"Runs capped at {self._MAX_RUNS}.")
+            n_runs = self._MAX_RUNS
+            self._runs_edit.setText(str(n_runs))
 
         variations: list[tuple[str, str, float, str]] = []
         for r in range(self._table.rowCount()):

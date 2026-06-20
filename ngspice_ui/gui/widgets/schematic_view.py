@@ -31,6 +31,7 @@ from ...schematic.kicad.sexpr import find as _find
 from ...schematic.kicad.sexpr import find_all as _find_all
 from ...schematic.kicad.sexpr import parse_sexp as _parse_sexp
 from ...schematic.kicad.sexpr import prop as _prop
+from ...schematic.kicad.sexpr import sub_symbol_unit as _sub_unit
 
 # ---------------------------------------------------------------------------
 # Colors  (KiCad-inspired dark scheme)
@@ -100,7 +101,12 @@ class _LibGraphic:
 @dataclass
 class _SymDef:
     lib_id: str
-    graphics: list[_LibGraphic] = field(default_factory=list)
+    # unit → graphics; unit 0 is common to every unit. Multi-unit ICs draw
+    # only the placed unit's graphics (plus unit 0), not every unit at once.
+    graphics_by_unit: dict[int, list[_LibGraphic]] = field(default_factory=dict)
+
+    def graphics_for_unit(self, unit: int) -> list[_LibGraphic]:
+        return self.graphics_by_unit.get(0, []) + self.graphics_by_unit.get(unit, [])
 
 
 @dataclass
@@ -113,6 +119,7 @@ class _PlacedSym:
     mirror_y: bool
     reference: str
     value: str
+    unit: int = 1
     ref_x: float = 0
     ref_y: float = 0
     ref_angle: float = 0
@@ -390,7 +397,8 @@ def _parse_schematic(path: Path) -> _Schematic:
                 parts = sub_name.rsplit("_", 1)
                 if len(parts) == 2 and parts[1] == "2":
                     continue
-                _parse_graphics(sub, sdef.graphics)
+                unit_graphics = sdef.graphics_by_unit.setdefault(_sub_unit(sub_name), [])
+                _parse_graphics(sub, unit_graphics)
             sch.sym_defs[lib_id] = sdef
 
     # -- Placed symbols --
@@ -422,6 +430,14 @@ def _parse_schematic(path: Path) -> _Schematic:
         mir = _find(sym, "mirror")
         mx_ = isinstance(mir, list) and _atom(mir, 1) == "x"
         my_ = isinstance(mir, list) and _atom(mir, 1) == "y"
+
+        unit_n = _find(sym, "unit")
+        unit = 1
+        if unit_n is not None:
+            try:
+                unit = int(_atom(unit_n, 1, "1"))
+            except ValueError:
+                unit = 1
 
         value = _prop(sym, "Value")
 
@@ -457,6 +473,7 @@ def _parse_schematic(path: Path) -> _Schematic:
             mirror_y=my_,
             reference=ref,
             value=value,
+            unit=unit,
             ref_x=ref_x,
             ref_y=ref_y,
             ref_angle=ref_a,
@@ -719,7 +736,7 @@ class _SchCanvas(QWidget):
             sy_m = -1.0 if sym.mirror_y else 1.0
             p.scale(sx_m, sy_m)
 
-            for g in sdef.graphics:
+            for g in sdef.graphics_for_unit(sym.unit):
                 if g.kind == "polyline":
                     if len(g.pts) < 2:
                         continue

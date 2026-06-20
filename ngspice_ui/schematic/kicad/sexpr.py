@@ -16,6 +16,10 @@ def parse_sexp(text: str) -> list:
 
     Strings are unescaped; bare atoms are returned as ``str``. The top-level
     node is returned as a list; an empty input yields ``[]``.
+
+    Raises ``ValueError`` for malformed input — an unterminated list or quoted
+    string, or trailing data after the top-level expression — so a truncated or
+    damaged schematic fails loudly instead of being partially imported.
     """
     pos = 0
     n = len(text)
@@ -36,9 +40,10 @@ def parse_sexp(text: str) -> list:
             children = []
             while True:
                 skip_ws()
-                if pos >= n or text[pos] == ")":
-                    if pos < n:
-                        pos += 1
+                if pos >= n:
+                    raise ValueError("Unterminated S-expression (missing ')')")
+                if text[pos] == ")":
+                    pos += 1
                     break
                 child = read_node()
                 if child is not None:
@@ -55,8 +60,9 @@ def parse_sexp(text: str) -> list:
                 else:
                     parts.append(text[pos])
                 pos += 1
-            if pos < n:
-                pos += 1  # closing "
+            if pos >= n:
+                raise ValueError("Unterminated string in S-expression")
+            pos += 1  # closing "
             return "".join(parts)
         else:
             start = pos
@@ -65,7 +71,15 @@ def parse_sexp(text: str) -> list:
             return text[start:pos]
 
     skip_ws()
-    return read_node() or []
+    node = read_node()
+    if node is None:
+        return []
+    # Anything other than whitespace after the root means the file is damaged
+    # or contains concatenated expressions that would be silently dropped.
+    skip_ws()
+    if pos < n:
+        raise ValueError("Trailing data after top-level S-expression")
+    return node
 
 
 def find(node: list, tag: str) -> Optional[list]:
@@ -96,3 +110,19 @@ def prop(sym: list, name: str) -> str:
         if atom(p, 1) == name:
             return atom(p, 2)
     return ""
+
+
+def sub_symbol_unit(name: str) -> int:
+    """Unit index from a KiCad lib sub-symbol name ``BASE_<unit>_<bodystyle>``.
+
+    The ``BASE`` portion may itself contain underscores, so the unit and body
+    style are the last two ``_``-separated tokens. Unit 0 holds elements common
+    to every unit. Returns 0 when the name does not follow the convention.
+    """
+    parts = name.rsplit("_", 2)
+    if len(parts) == 3:
+        try:
+            return int(parts[1])
+        except ValueError:
+            pass
+    return 0

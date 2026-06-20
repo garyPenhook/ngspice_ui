@@ -43,7 +43,50 @@ jobs:
       - name: Ruff lint
         run: python -m ruff check .
 
+      - name: Ruff format check
+        run: python -m ruff format --check .
+
+      - name: Type check (mypy)
+        run: python -m mypy
+
       - name: Pytest
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short --cov=ngspice_ui --cov-report=term-missing
+
+  package:
+    name: Build & audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build & audit tooling
+        run: |
+          pip install --upgrade pip
+          pip install build pip-audit
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Verify wheel ships example circuits
+        run: |
+          python - <<'PY'
+          import pathlib, zipfile, sys
+          wheels = list(pathlib.Path("dist").glob("*.whl"))
+          assert wheels, "no wheel built"
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          assert any("examples/rc_lowpass.cir" in n for n in names), \
+              f"examples missing from wheel: {names}"
+          print("wheel contains example circuits")
+          PY
+
+      - name: Audit runtime dependencies
+        run: |
+          pip install dist/*.whl
+          pip-audit --desc

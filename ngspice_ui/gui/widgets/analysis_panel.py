@@ -138,25 +138,25 @@ class AnalysisPanel(QWidget):
 
     def _update_preview(self) -> None:
         lines = []
-        temp_line = self._get_temp_line()
-        if temp_line:
-            lines.append(temp_line)
+        temps = self.get_temperatures()
+        if len(temps) == 1:
+            lines.append(f".temp {temps[0]}")
+        elif len(temps) > 1:
+            # ngspice 46 has no working .step temp; multiple temperatures run as
+            # a sequence of independent passes (one .temp each).
+            lines.append(f"# {len(temps)} runs: .temp " + " / ".join(temps))
         main_line = self.get_netlist_line()
         if main_line:
             lines.append(main_line)
         self._preview.setText("\n".join(lines) if lines else "(from netlist)")
         self.analysis_changed.emit()
 
-    def _get_temp_line(self) -> str:
+    def get_temperatures(self) -> list[str]:
+        """Return the configured temperature value(s), or [] if not enabled."""
         if not self._temp_box.isChecked():
-            return ""
+            return []
         val = self._temp_edit.text().strip()
-        if not val:
-            return ""
-        temps = val.split()
-        if len(temps) == 1:
-            return f".temp {temps[0]}"
-        return ".step temp list " + " ".join(temps)
+        return val.split() if val else []
 
     def _get_widgets(self, key: str) -> dict[str, QWidget]:
         idx = self._combo.currentIndex()
@@ -228,11 +228,6 @@ class AnalysisPanel(QWidget):
                 kwargs[p.name] = w.text().strip()
         return "." + spec.command.format(**kwargs)
 
-    def get_temperature_lines(self) -> list[str]:
-        """Return .temp/.step lines to prepend, or empty list."""
-        line = self._get_temp_line()
-        return [line] if line else []
-
     def get_config(self) -> dict:
         """Return a JSON-serialisable dict describing the current analysis setup."""
         key = self.selected_key()
@@ -255,10 +250,31 @@ class AnalysisPanel(QWidget):
         cfg["temp_value"] = self._temp_edit.text().strip()
         return cfg
 
+    def _reset_all_params(self) -> None:
+        """Reset every analysis page's widgets back to their spec defaults.
+
+        set_config only writes the *selected* analysis's parameters, so without
+        this the other pages keep whatever a previous project left in them —
+        reselecting an analysis would then restore stale values. Clearing all
+        pages first makes the loaded config the single source of truth.
+        """
+        for page_idx, key in enumerate(ANALYSIS_KEY_ORDER, start=1):
+            widgets = self._param_widgets[page_idx]
+            for p in ANALYSES[key].params:
+                w = widgets.get(p.name)
+                if w is None:
+                    continue
+                if isinstance(w, QComboBox):
+                    idx = w.findText(p.default) if p.default else -1
+                    w.setCurrentIndex(idx if idx >= 0 else 0)
+                elif isinstance(w, QLineEdit):
+                    w.setText(p.default or "")
+
     def set_config(self, cfg: dict) -> None:
         """Restore analysis setup from a dict previously returned by get_config()."""
         if not isinstance(cfg, dict):
             cfg = {}
+        self._reset_all_params()
         key = cfg.get("key")
         if key is None or key not in ANALYSES:
             self._combo.setCurrentIndex(0)

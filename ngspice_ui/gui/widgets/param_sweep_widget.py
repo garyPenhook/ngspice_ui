@@ -15,6 +15,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ngspice_ui.models.monte_carlo import insert_before_end, parse_spice_val
+
+# Hard cap on generated sweep points — guards against a tiny step over a huge
+# range producing an unbounded value list (and run sequence).
+_MAX_SWEEP_POINTS = 1000
+
+
+def _fmt_val(v: float) -> str:
+    """Format a swept value compactly, trimming float-accumulation noise."""
+    return f"{v:.10g}"
+
 
 class ParamSweepWidget(QWidget):
     """Configure and trigger a parametric (.step param) sweep.
@@ -105,19 +116,31 @@ class ParamSweepWidget(QWidget):
     def _values(self) -> list[str]:
         if self._radio_lin.isChecked():
             try:
-                start = float(self._start_edit.text())
-                stop = float(self._stop_edit.text())
-                step = float(self._step_edit.text())
-                if step == 0:
-                    return []
-                vals = []
-                v = start
-                while v <= stop + abs(step) * 1e-9:
-                    vals.append(str(v))
-                    v += step
-                return vals
+                # Accept SPICE-style magnitudes (1k, 2.2u, 100MEG, …), not just
+                # bare floats — float("1k") would otherwise raise.
+                start = parse_spice_val(self._start_edit.text())
+                stop = parse_spice_val(self._stop_edit.text())
+                step = parse_spice_val(self._step_edit.text())
             except ValueError:
                 return []
+            if step == 0:
+                return []
+            # The step sign must point from start toward stop, otherwise the
+            # loop would never reach the bound (previously an infinite loop).
+            if (stop - start) * step < 0:
+                return []
+            tol = abs(step) * 1e-9
+            vals: list[str] = []
+            v = start
+            if step > 0:
+                while v <= stop + tol and len(vals) < _MAX_SWEEP_POINTS:
+                    vals.append(_fmt_val(v))
+                    v += step
+            else:
+                while v >= stop - tol and len(vals) < _MAX_SWEEP_POINTS:
+                    vals.append(_fmt_val(v))
+                    v += step
+            return vals
         else:
             return self._list_edit.text().split()
 
@@ -127,14 +150,10 @@ class ParamSweepWidget(QWidget):
         if not vals:
             self._preview.setText("")
             return
-        if self._radio_lin.isChecked():
-            start = self._start_edit.text().strip()
-            stop = self._stop_edit.text().strip()
-            step = self._step_edit.text().strip()
-            line = f".step param {name} {start} {stop} {step}"
-        else:
-            line = f".step param {name} list {' '.join(vals)}"
-        self._preview.setText(f".param {name}=0\n{line}")
+        shown = vals if len(vals) <= 8 else [*vals[:8], f"… (+{len(vals) - 8})"]
+        self._preview.setText(
+            f"{len(vals)} run(s), one per value:\n.param {name}=" + "  ".join(shown)
+        )
 
     def _emit_sweep(self) -> None:
         name = self._name_edit.text().strip()
@@ -143,23 +162,16 @@ class ParamSweepWidget(QWidget):
             return
         self.run_sweep.emit(name, vals)
 
-    def get_step_lines(self) -> list[str]:
-        """Return the .param + .step lines to prepend to the netlist."""
+    def build_netlists(self, base: str) -> list[str]:
+        """Return one netlist per swept value — *base* with a ``.param`` override.
+
+        ngspice 46 has no working ``.step``, so a parametric sweep is realised
+        as N independent runs. A ``.param name=value`` override is inserted
+        before ``.end`` (after the base netlist's own definitions), so it wins by
+        ngspice's last-assignment rule while the base ``.param`` is left intact.
+        """
         name = self._name_edit.text().strip()
         if not name:
             return []
         vals = self._values()
-        if not vals:
-            return []
-        if self._radio_lin.isChecked():
-            start = self._start_edit.text().strip()
-            stop = self._stop_edit.text().strip()
-            step = self._step_edit.text().strip()
-            return [
-                f".param {name}=0",
-                f".step param {name} {start} {stop} {step}",
-            ]
-        return [
-            f".param {name}=0",
-            f".step param {name} list {' '.join(vals)}",
-        ]
+        return [insert_before_end(base, f".param {name}={v}") for v in vals]

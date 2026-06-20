@@ -11,4 +11,11 @@ venv/
 .env
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 .idea/
+
+# Reference manuals / large docs downloaded into the workspace — keep them out
+# of git (and out of release artifacts) so builds don't depend on local files.
+*.pdf

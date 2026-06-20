@@ -17,7 +17,7 @@ from typing import Callable
 import numpy as np
 
 from .bindings import NgSpiceNotFoundError, get_lib  # noqa: F401 (re-exported)
-from .callbacks import SimEvent, build_callbacks
+from .callbacks import CharEvent, SimEvent, build_callbacks
 
 
 class NgSpiceSession:
@@ -47,6 +47,18 @@ class NgSpiceSession:
             return inst
 
     @classmethod
+    def _clear_instance(cls) -> None:
+        """Drop the cached singleton so a fresh construction can be retried.
+
+        Used when ``__init__`` fails part-way: ``__new__`` has already published
+        the reservation, so without this every subsequent ``NgSpiceSession()``
+        would wrongly raise "singleton already exists" even though no usable
+        session was ever built.
+        """
+        with cls._instance_lock:
+            cls._instance = None
+
+    @classmethod
     def get(cls) -> "NgSpiceSession":
         """Return the existing session, raising if none has been created."""
         with cls._instance_lock:
@@ -59,32 +71,41 @@ class NgSpiceSession:
         suppress_spinit: bool = False,
         suppress_spiceinit: bool = False,
     ) -> None:
-        self._lib = get_lib()
-        # Unbounded: control events (BGThreadEvent, InitDataEvent, …) must never
-        # be dropped.  DataPointEvent volume is controlled at the source by
-        # subsampling inside build_callbacks — see callbacks._LIVE_POINT_EVERY.
-        self.event_queue: queue.Queue[SimEvent] = queue.Queue()
+        # Any failure below leaves no usable session, so the singleton
+        # reservation made in __new__ must be released — otherwise the process
+        # is permanently poisoned and every retry reports "singleton".
+        try:
+            self._lib = get_lib()
+            # Unbounded: control events (BGThreadEvent, InitDataEvent, …) must never
+            # be dropped.  DataPointEvent volume is controlled at the source by
+            # subsampling inside build_callbacks — see callbacks._LIVE_POINT_EVERY.
+            self.event_queue: queue.Queue[SimEvent] = queue.Queue()
 
-        # Must keep callback objects alive for the entire session lifetime
-        self._callbacks = build_callbacks(self.event_queue)
+            # Must keep callback objects alive for the entire session lifetime
+            self._callbacks = build_callbacks(self.event_queue)
 
-        ret = self._lib.ngSpice_Init(
-            self._callbacks["send_char"],
-            self._callbacks["send_stat"],
-            self._callbacks["controlled_exit"],
-            self._callbacks["send_data"],
-            self._callbacks["send_init_data"],
-            self._callbacks["bg_thread_running"],
-            None,  # userData
-        )
-        if ret != 0:
-            raise RuntimeError(f"ngSpice_Init returned {ret}")
+            ret = self._lib.ngSpice_Init(
+                self._callbacks["send_char"],
+                self._callbacks["send_stat"],
+                self._callbacks["controlled_exit"],
+                self._callbacks["send_data"],
+                self._callbacks["send_init_data"],
+                self._callbacks["bg_thread_running"],
+                None,  # userData
+            )
+            if ret != 0:
+                raise RuntimeError(f"ngSpice_Init returned {ret}")
 
-        # nospinit/nospiceinit must be called after Init (they touch Init-allocated state)
-        if suppress_spinit:
-            self._lib.ngSpice_nospinit()
-        if suppress_spiceinit:
-            self._lib.ngSpice_nospiceinit()
+            # nospinit/nospiceinit must be called after Init (they touch
+            # Init-allocated state). Both were added in newer ngspice releases;
+            # skip silently when the loaded library predates them.
+            if suppress_spinit and hasattr(self._lib, "ngSpice_nospinit"):
+                self._lib.ngSpice_nospinit()
+            if suppress_spiceinit and hasattr(self._lib, "ngSpice_nospiceinit"):
+                self._lib.ngSpice_nospiceinit()
+        except BaseException:
+            self._clear_instance()
+            raise
 
     # ------------------------------------------------------------------
     # Netlist loading
@@ -197,16 +218,24 @@ class NgSpiceSession:
         """Fetch a vector by name (e.g. 'tran1.v(out)' or 'v(out)').
 
         Acquires the realloc lock while reading so the bg thread cannot
-        resize the buffer mid-read.
+        resize the buffer mid-read.  The lock API was added in newer ngspice
+        releases; on older libraries that lack it we read without the guard
+        (the only safe option available) rather than crashing on a missing
+        symbol.
         """
-        self._lib.ngSpice_LockRealloc()
+        has_lock = hasattr(self._lib, "ngSpice_LockRealloc") and hasattr(
+            self._lib, "ngSpice_UnlockRealloc"
+        )
+        if has_lock:
+            self._lib.ngSpice_LockRealloc()
         try:
             p = self._lib.ngGet_Vec_Info(vecname.encode("utf-8"))
             if not p:
                 raise KeyError(f"Vector not found: {vecname!r}")
             return VectorData.from_c(p.contents)
         finally:
-            self._lib.ngSpice_UnlockRealloc()
+            if has_lock:
+                self._lib.ngSpice_UnlockRealloc()
 
     # ------------------------------------------------------------------
     # Co-simulation
@@ -247,22 +276,55 @@ class NgSpiceSession:
         """
         from .bindings import CB_GetISRCData, CB_GetSyncData, CB_GetVSRCData
 
+        # Registering/clearing sync callbacks swaps raw C function pointers that
+        # the background thread invokes. Halt any running simulation first so we
+        # never race it — same invariant load_netlist relies on.
+        self._safe_halt()
+
+        # A co-sim callback that raises still has to hand ngspice *some* defined
+        # value, but silently substituting 0.0 turns an invalid expression into
+        # an apparently-successful, scientifically-wrong run. Surface the first
+        # failure of each callback kind through the event queue (which the
+        # controller treats as a run error) so the user is told the results are
+        # bogus. Reported once per kind to avoid flooding the queue every step.
+        reported = {"v": False, "i": False, "s": False}
+
+        def _report(kind: str, msg: str) -> None:
+            if not reported[kind]:
+                reported[kind] = True
+                self.event_queue.put_nowait(CharEvent(line=msg))
+
         def _vsrc(voltage_ptr, time, srcname, srcindex, userdata):
+            # Always write a defined value: ngspice uses voltage_ptr[0] whether
+            # or not we set it, so leaving it untouched on error feeds the solver
+            # a stale/garbage voltage.
+            voltage_ptr[0] = 0.0
             if vsrc_fn is not None:
+                name = srcname.decode("utf-8", errors="replace") if srcname else ""
                 try:
-                    name = srcname.decode("utf-8") if srcname else ""
                     voltage_ptr[0] = float(vsrc_fn(float(time), name))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    voltage_ptr[0] = 0.0
+                    _report(
+                        "v",
+                        f"Error: co-sim voltage source {name!r} failed: {exc} "
+                        "(output forced to 0 V; results are invalid)",
+                    )
             return 0
 
         def _isrc(current_ptr, time, srcname, srcindex, userdata):
+            current_ptr[0] = 0.0
             if isrc_fn is not None:
+                name = srcname.decode("utf-8", errors="replace") if srcname else ""
                 try:
-                    name = srcname.decode("utf-8") if srcname else ""
                     current_ptr[0] = float(isrc_fn(float(time), name))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    current_ptr[0] = 0.0
+                    _report(
+                        "i",
+                        f"Error: co-sim current source {name!r} failed: {exc} "
+                        "(output forced to 0 A; results are invalid)",
+                    )
             return 0
 
         def _sync(actual_time, delta_ptr, old_delta, index, is_diff, nm, userdata):
@@ -271,8 +333,8 @@ class NgSpiceSession:
                     result = sync_fn(float(actual_time), float(old_delta))
                     if result is not None:
                         delta_ptr[0] = float(result)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _report("s", f"Error: co-sim sync callback failed: {exc}")
             return 0
 
         vsrc_c = CB_GetVSRCData(_vsrc)
@@ -303,8 +365,13 @@ class NgSpiceSession:
                 self._lib.ngSpice_Command(b"bg_halt")
         except Exception:
             pass
+        # Only release the class reservation if it still points at *this*
+        # object. A session whose __init__ failed (and already cleared the
+        # reservation) must not, when finally garbage-collected, wipe the
+        # reference to a different, healthy session created in the meantime.
         with NgSpiceSession._instance_lock:
-            NgSpiceSession._instance = None
+            if NgSpiceSession._instance is self:
+                NgSpiceSession._instance = None
 
 
 # ---------------------------------------------------------------------------

@@ -7,8 +7,13 @@ import math
 import numpy as np
 import pytest
 
-from ngspice_ui.models.expr import safe_eval
-from ngspice_ui.models.monte_carlo import generate_netlists, parse_spice_val, vary_value
+from ngspice_ui.models.expr import safe_eval, validate_expr
+from ngspice_ui.models.monte_carlo import (
+    generate_netlists,
+    insert_before_end,
+    parse_spice_val,
+    vary_value,
+)
 from ngspice_ui.models.waveform import compute_fft, compute_group_delay
 
 
@@ -32,6 +37,23 @@ def _ns(**extra):
         "None": None,
         **extra,
     }
+
+
+def test_safe_numpy_caps_oversized_allocation():
+    from ngspice_ui.models.expr import SAFE_NUMPY
+
+    ns = _ns(np=SAFE_NUMPY)
+    oversized = (
+        "np.zeros(10**12)",
+        "np.ones(10**12)",
+        "np.arange(0, 10**12)",
+        "np.linspace(0, 1, 10**12)",
+    )
+    for src in oversized:
+        with pytest.raises(ValueError, match="refusing to allocate"):
+            safe_eval(src, ns)
+    # Reasonably-sized allocations and reductions still work.
+    assert safe_eval("np.sum(np.zeros(10))", ns) == 0.0
 
 
 def test_safe_eval_numeric():
@@ -61,6 +83,34 @@ def test_safe_eval_blocks_import():
 def test_safe_eval_blocks_subclass_escape():
     with pytest.raises(ValueError, match="private attribute"):
         safe_eval("().__class__.__bases__[0].__subclasses__()", _ns())
+
+
+def test_insert_before_end_places_directive_before_end():
+    out = insert_before_end("* t\nR1 1 0 1k\n.end", ".param x=5")
+    assert out.splitlines() == ["* t", "R1 1 0 1k", ".param x=5", ".end"]
+
+
+def test_insert_before_end_appends_when_no_end():
+    out = insert_before_end("* t\nR1 1 0 1k", ".param x=5")
+    assert out.splitlines()[-1] == ".param x=5"
+
+
+def test_validate_expr_allows_extra_names():
+    # Co-sim expressions bind extra parameters (t, name, old_delta).
+    validate_expr("np.sin(t) + 1", frozenset({"t", "name"}))
+    validate_expr("min(old_delta, 1e-6)", frozenset({"t", "old_delta"}))
+
+
+def test_validate_expr_rejects_unbound_name():
+    # A name not in the whitelist nor the extra set is rejected, even though
+    # the surrounding co-sim eval scope has empty builtins.
+    with pytest.raises(ValueError, match="name not allowed"):
+        validate_expr("__import__('os')", frozenset({"t", "name"}))
+
+
+def test_validate_expr_rejects_attribute_escape():
+    with pytest.raises(ValueError, match="private attribute"):
+        validate_expr("t.__class__", frozenset({"t", "name"}))
 
 
 def test_safe_eval_blocks_np_file_io():
@@ -203,6 +253,15 @@ def test_compute_fft_unit_sine_near_zero_db():
 def test_compute_fft_rejects_short_input():
     with pytest.raises(ValueError):
         compute_fft(np.array([0.0, 1.0]), np.array([0.0, 1.0]))
+
+
+def test_compute_fft_rejects_nonmonotonic_time():
+    # Endpoints increase but an interior sample regresses — np.interp would
+    # silently produce garbage, so this must be rejected.
+    x = np.array([0.0, 1.0, 0.5, 2.0])
+    y = np.array([0.0, 1.0, 0.0, -1.0])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        compute_fft(x, y)
 
 
 def test_compute_group_delay_flat_phase():

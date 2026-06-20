@@ -132,12 +132,18 @@ Cfilter out 0 100u
         ".param sweep template",
         """\
 * Parametric sweep example
-.param Rval=1k
+* ngspice 46 has no .step; sweep with a .control foreach/alter loop instead.
+* (The Param Sweep panel runs the same sweep as separate, comparable plots.)
 Vin in 0 DC 1
-R1 in out {Rval}
+R1 in out 1k
 Rload out 0 1k
-.step param Rval list 100 1k 10k 100k
-.op
+.control
+  foreach rval 100 1k 10k 100k
+    alter R1 = $rval
+    op
+    print v(out)
+  end
+.endc
 .end
 """,
     ),
