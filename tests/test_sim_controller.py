@@ -271,14 +271,13 @@ def test_timestep_too_small_with_nonzero_step_fails_run(qapp):
     session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
     ctrl._drain_queue()
     assert ctrl.last_run_had_errors is True
-    assert ctrl.last_run_warning is None
 
 
-def test_zero_timestep_with_named_cause_is_benign_not_failure(qapp):
-    # Regression: the end-of-run zero-step (timestep = 0 at tstop) is benign
-    # even when ngspice attributes a node ("trouble with node ...") — keying off
-    # the cause text alone wrongly discarded valid data (e.g. the half-wave
-    # rectifier example, which reached tstop with full data).
+def test_zero_timestep_with_named_cause_is_clean_not_failure(qapp):
+    # Regression: the end-of-run zero-step (timestep = 0 at tstop) is a clean
+    # completion even when ngspice attributes a node ("trouble with node ...") —
+    # keying off the cause text alone wrongly discarded valid data (e.g. the
+    # half-wave rectifier example, which reached tstop with full data).
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
@@ -288,11 +287,10 @@ def test_zero_timestep_with_named_cause_is_benign_not_failure(qapp):
     session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
     ctrl._drain_queue()
     assert ctrl.last_run_had_errors is False
-    assert ctrl.last_run_warning is not None
 
 
-def test_benign_end_of_run_timestep_is_warning_not_failure(qapp):
-    # "cause unrecorded" at the stop time leaves valid data: warn, do not fail.
+def test_benign_end_of_run_timestep_is_clean_not_failure(qapp):
+    # "cause unrecorded" zero-step at the stop time is a clean completion.
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
@@ -302,7 +300,6 @@ def test_benign_end_of_run_timestep_is_warning_not_failure(qapp):
     session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
     ctrl._drain_queue()
     assert ctrl.last_run_had_errors is False
-    assert ctrl.last_run_warning is not None
 
 
 def test_source_stepping_failure_marks_run_failed(qapp):
@@ -334,8 +331,8 @@ def test_user_halt_abort_line_is_not_a_failure(qapp):
     assert ctrl.last_run_had_errors is False
 
 
-def test_warning_then_hard_error_supersedes_warning(qapp):
-    # A benign timestep followed by a real error in a later analysis must fail.
+def test_benign_timestep_then_hard_error_still_fails(qapp):
+    # A benign zero-step followed by a real error in a later analysis must fail.
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
@@ -345,11 +342,11 @@ def test_warning_then_hard_error_supersedes_warning(qapp):
     session.event_queue.put_nowait(CharEvent(line="stderr Error: something fatal"))
     ctrl._drain_queue()
     assert ctrl.last_run_had_errors is True
-    assert ctrl.last_run_warning is None
 
 
-def test_warning_state_is_cleared_on_next_run(qapp):
-    # The benign warning is per-run: a clean run after a warned one reports clean.
+def test_benign_state_is_cleared_so_next_runs_real_abort_is_caught(qapp):
+    # The benign-abort suppression is per-run: a bare abort in a later run (no
+    # preceding benign zero-step) must still fail.
     ctrl, session = _make_controller()
     ctrl.run()
     session.event_queue.put_nowait(
@@ -357,10 +354,11 @@ def test_warning_state_is_cleared_on_next_run(qapp):
                        "cause unrecorded.")
     )
     ctrl._drain_queue()
-    assert ctrl.last_run_warning is not None
-    ctrl.run()  # _begin_run resets per-run state
-    assert ctrl.last_run_warning is None
     assert ctrl.last_run_had_errors is False
+    ctrl.run()  # _begin_run resets per-run state
+    session.event_queue.put_nowait(CharEvent(line="stderr run simulation(s) aborted"))
+    ctrl._drain_queue()
+    assert ctrl.last_run_had_errors is True
 
 
 def test_halt_flag_is_cleared_so_next_runs_real_abort_is_caught(qapp):

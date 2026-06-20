@@ -52,8 +52,8 @@ _ABORT_RE = re.compile(r"\bsimulation(?:\(s\))?\s+(?:interrupted|aborted)\b", re
 # The transient "timestep too small" diagnostic that precedes most aborts. The
 # reliable benign-vs-genuine signal is the *timestep value*, not the trailing
 # cause text: a value of exactly 0 means the solver reached the stop time (or a
-# breakpoint) and had nothing left to integrate — valid data, downgrade to a
-# warning — whereas a tiny but NONZERO value means it kept subdividing the step
+# breakpoint) and had nothing left to integrate — a clean completion with valid
+# data — whereas a tiny but NONZERO value means it kept subdividing the step
 # mid-run and still could not converge, a genuine failure. The cause text is an
 # unreliable discriminator on its own: ngspice emits the benign zero-step case
 # both as ": cause unrecorded" AND as ': trouble with node "..."' depending on
@@ -96,11 +96,10 @@ class SimController(QObject):
         # True once the user explicitly halts, so the "aborted"/"interrupted"
         # line ngspice then emits is classified as a halt, not a failure.
         self._run_halted = False
-        # True once a benign end-of-run "timestep too small: cause unrecorded"
-        # is seen, so the following abort line is downgraded to a warning.
+        # True once a benign end-of-run "timestep too small" (timestep == 0,
+        # i.e. the solver reached the stop time) is seen, so the abort line that
+        # follows is treated as a clean completion rather than a failure.
         self._run_benign_abort = False
-        # Non-fatal warning for the current/last run (None when there is none).
-        self._run_warning: str | None = None
 
         # Sequential bg_run state (driven by sim_finished) shared by Monte Carlo
         # and parametric/temperature sweeps — ngspice 46 has no working .step.
@@ -132,25 +131,12 @@ class SimController(QObject):
         """
         return self._run_errored
 
-    @property
-    def last_run_warning(self) -> str | None:
-        """Non-fatal warning from the most recent run, or None.
-
-        Set for an outcome that left usable data but did not finish cleanly —
-        currently a benign end-of-run ``timestep too small: cause unrecorded``
-        (the solver reached the stop time and took a zero-length final step).
-        Always None when :attr:`last_run_had_errors` is True, since a hard error
-        supersedes any warning.
-        """
-        return None if self._run_errored else self._run_warning
-
     def _begin_run(self) -> None:
         """Reset per-run error tracking before launching a (bg) simulation."""
         self._pending_errors.clear()
         self._run_errored = False
         self._run_halted = False
         self._run_benign_abort = False
-        self._run_warning = None
 
     @Slot(str)
     def load_netlist(self, text: str, base_dir: str | None = None) -> None:
@@ -381,25 +367,20 @@ class SimController(QObject):
             self.plot_data.emit(data_events)
 
     def _classify_output_line(self, line: str) -> None:
-        """Update per-run error/warning state from one ngspice output *line*.
+        """Update per-run error state from one ngspice output *line*.
 
         Three outcomes stream through the same callback and must be told apart:
         a hard failure (results discarded by the caller), a benign end-of-run
-        transient artifact (results kept, a warning surfaced), and a user halt
+        stop (a clean completion — results kept, no failure), and a user halt
         (neither). The ``timestep too small`` diagnostic is inspected before the
-        abort line it precedes so the abort can be downgraded when appropriate.
+        abort line it precedes so that abort can be classified correctly.
         """
         if _TIMESTEP_SMALL_RE.search(line):
             if self._is_benign_timestep(line):
                 # Solver reached the stop time / a breakpoint and took a
-                # zero-length next step. Data up to that point is valid — keep
-                # it, warn.
+                # zero-length next step — the requested window completed with
+                # valid data. Treat the abort that follows as a clean finish.
                 self._run_benign_abort = True
-                if not self._run_errored:
-                    self._run_warning = (
-                        "transient stopped early (timestep too small at end of "
-                        "run); results may be incomplete"
-                    )
             else:
                 # A tiny but nonzero step that still won't converge is a real
                 # mid-run failure.

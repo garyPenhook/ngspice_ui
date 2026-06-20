@@ -80,38 +80,34 @@ def test_current_completion_is_not_discarded():
     assert any("failed" in line.lower() for line in mw._console.lines)
 
 
-def test_benign_warning_completion_is_flagged_but_not_failed():
-    # A run that finished with a non-fatal warning (e.g. a benign end-of-run
-    # "timestep too small") must surface the warning and a "with warnings"
-    # status, yet still proceed to snapshot results (unlike the failed path).
-    # We stub _snapshot_result to stop right after the warning branch so the
-    # heavy plotting/measurement path is not needed.
+def test_benign_completion_is_not_failed_and_proceeds_to_snapshot():
+    # A run whose only "abort" is the benign end-of-run zero-step is a clean
+    # completion: no failure, no warning banner — it proceeds to snapshot
+    # results. We stub _snapshot_result to stop right after the error/clean
+    # gate so the heavy plotting/measurement path is not needed.
     mw = _bare_window(run_epoch=5, project_epoch=5)
     statuses: list[str] = []
     mw._set_status = statuses.append  # type: ignore[method-assign]
 
     class _Ctrl:
         last_run_had_errors = False
-        last_run_warning = "transient stopped at end of run (timestep too small)"
 
     mw._controller = _Ctrl()  # type: ignore[assignment]
 
     reached_snapshot = []
 
-    def _stop_after_warning():
+    def _stop_at_snapshot():
         reached_snapshot.append(True)
-        raise RuntimeError("stop")  # sentinel: warning branch already ran
+        raise RuntimeError("stop")  # sentinel: passed the failure gate cleanly
 
-    mw._snapshot_result = _stop_after_warning  # type: ignore[method-assign]
+    mw._snapshot_result = _stop_at_snapshot  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="stop"):
         mw._on_sim_finished()
 
-    # Warning surfaced, status reflects warnings, and it did NOT take the
-    # failed early-return (it proceeded toward snapshotting results).
-    assert any("warning" in line.lower() for line in mw._console.lines)
+    # No failure, no "with warnings" banner, and it proceeded to snapshot.
     assert not any("failed" in line.lower() for line in mw._console.lines)
-    assert any("with warnings" in s.lower() for s in statuses)
+    assert not any("warning" in s.lower() for s in statuses)
     assert reached_snapshot == [True]
 
 
